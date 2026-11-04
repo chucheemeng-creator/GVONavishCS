@@ -1,0 +1,5 @@
+<Solution>
+  <!-- 第一個專案是預設的啟動專案（按 F5 執行的那個） -->
+  <Project Path="GVONavish/GVONavish.csproj" />
+  <Project Path="GVO.Common/GVO.Common.csproj" />
+</Solution>
