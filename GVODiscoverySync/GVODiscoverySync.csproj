@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 版本號：發佈新版時只要改這裡 -->
+    <Version>0.1.7</Version>
+    <OutputType>WinExe</OutputType>
+    <!-- Windows 內建的文字辨識（Windows.Media.Ocr）需要指定 Windows 10 SDK 版本 -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>GVODiscoverySync</AssemblyName>
+    <RootNamespace>GVODiscoverySync</RootNamespace>
+    <!-- 讓這個專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 找遊戲視窗、截圖、安全存檔 -->
+    <ProjectReference Include="..\GVO.Common\GVO.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 直接改 xlsx 裡面的儲存格，其他內容（格式化條件、表格、註解）原封不動 -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
+  </ItemGroup>
+
+</Project>

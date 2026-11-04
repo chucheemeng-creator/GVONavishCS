@@ -59,6 +59,7 @@ dotnet build -c Release
 |---|---|
 | `GVO.Common/` | 共用類別庫：找遊戲視窗、顯示縮放換算、截圖、安全存檔 |
 | `GVONavish/` | 航海地圖程式（`GVONavish.exe`） |
+| `GVODiscoverySync/` | 發現物同步：讀遊戲的發現物一覽，在安瑟兒的 Excel 打勾（`GVODiscoverySync.exe`，說明見該資料夾的 README） |
 
 ---
 
@@ -209,7 +210,7 @@ GVONavishCS/
 
 ## 致謝
 
-- **GVONavi**：最早的版本，作者不詳，原始碼已不可考。部分地圖操作（雙擊座標、Shift／Ctrl＋Shift 雙擊規劃）沿用它的習慣。
+- **GVONavi**：最早的版本，作者 mimizu（[巴哈姆特討論串](https://forum.gamer.com.tw/Co.php?bsn=7200&sn=310904)）。部分地圖操作（雙擊座標、Shift／Ctrl＋Shift 雙擊規劃）沿用它的習慣。
 - **GVONavish**：© 2014 @MandhelingFreak，原始的 C++ 版本。
 - **GVONavish 英文版**：[the_samedog](https://github.com/samedog/GVONavish)。
 - **世界地圖 `map.png`**：MTC 地圖，© Shackleton 2014（[mapshack.wordpress.com](http://mapshack.wordpress.com/)）。
