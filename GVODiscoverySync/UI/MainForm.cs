@@ -1038,6 +1038,12 @@ public sealed class MainForm : Form
     private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item,
         Occurrence? occurrence)
     {
+        // 這一列（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它，什麼都不動。
+        // 要放在最前面：否則下面會先把佔住這個發現物的那一筆挪走，然後才發現不用加
+        if (occurrence is not null && _matched.Values.Any(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)))
+        {
+            return false;
+        }
         if (_matched.TryGetValue(item, out Found? existing))
         {
             // 這個發現物已經在清單上。同名組的列一開始是依序填空位，那一筆不一定就是這一列，要先看身分：
@@ -1068,11 +1074,6 @@ public sealed class MainForm : Form
             _matched[free] = existing;
             UpdateRow(existing, resetCheck: true);
             // 往下走：為這一列新增一筆確定的
-        }
-        // 這一個（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它
-        if (occurrence is not null && _matched.Values.Any(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)))
-        {
-            return false;
         }
         // 同一個身分之前用「同名，請確認」先記下的那一筆：就是這一列，改成功績判斷出來的那一個。
         // 只改同一個身分的；沒有身分的那一筆可能是另一列，不能拿來改（改錯會把另一隻變成已確定並預設寫入）
@@ -1299,6 +1300,10 @@ public sealed class MainForm : Form
         if (f.Match.IsVariant && !f.Match.Variants.Contains(item))
         {
             Suppress(f.Match.Variants[0]);
+            if (f.Occurrence is null)
+            {
+                AnonymousRemoved(f.Match.Variants[0]); // 沒有身分的列：沒有鄰居的列靠這個數，否則會被補回來
+            }
         }
         DetachFound(f);
         f.Assigned = item;
@@ -1318,6 +1323,12 @@ public sealed class MainForm : Form
         }
     }
 
+    private void AnonymousRemoved(DiscoveryItem first)
+    {
+        _anonymousRemoved.TryGetValue(first, out int n);
+        _anonymousRemoved[first] = n + 1;
+    }
+
     private void Suppress(DiscoveryItem first)
     {
         _variantSuppressed.TryGetValue(first, out int n);
@@ -1335,8 +1346,7 @@ public sealed class MainForm : Form
             }
             else
             {
-                _anonymousRemoved.TryGetValue(f.Match.Variants[0], out int n);
-                _anonymousRemoved[f.Match.Variants[0]] = n + 1;
+                AnonymousRemoved(f.Match.Variants[0]);
             }
         }
         RememberResolved(f);
