@@ -57,7 +57,7 @@ public sealed class MainForm : Form
         public bool PageByValue { get; init; }
 
         /// <summary>同名組的列：它是看過的哪一個（用上下鄰居辨識的身分），還不知道時是 null。</summary>
-        public HashSet<string>? Occurrence { get; set; }
+        public Occurrence? Occurrence { get; set; }
 
         public string Note { get; init; } = "";
 
@@ -89,11 +89,38 @@ public sealed class MainForm : Form
     // 同名的一組（以組裡第一個為代表）→ 使用者移除、或改指定到組外的筆數（補的時候要算進去）
     private readonly Dictionary<DiscoveryItem, int> _variantSuppressed = [];
     // 同名的一組 → 看過的每一個（用上下鄰居的名稱分辨：鄰居不同就是不同的一個）
-    private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
+    private readonly Dictionary<DiscoveryItem, List<Occurrence>> _variantOccurrences = [];
     // 使用者移除過的同名列的身分：之後再讀到同一個，不要加回來
-    private readonly HashSet<HashSet<string>> _removedOccurrences = [];
+    private readonly HashSet<Occurrence> _removedOccurrences = [];
     // 同名組的一列（AddVariants 用）
-    private sealed record VariantRow(string Text, bool HasCard, HashSet<string>? Occurrence);
+    private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence);
+
+    /// <summary>
+    /// 同名組裡看過的一列的身分：它上一列、下一列已確定的名稱（Excel 的寫法）。
+    /// 捲動時鄰居不會變，只是到了頁面邊緣只看得到一邊；之後看到另一邊時補上。
+    /// 用參考相等當作身分（同一個物件＝同一列）。
+    /// </summary>
+    private sealed class Occurrence
+    {
+        public string Above { get; set; } = "";
+        public string Below { get; set; } = "";
+
+        // 和「上一列是 above、下一列是 below」是不是同一列：規則和 SamePosition 一樣
+        public bool Matches(string above, string below)
+        {
+            bool aboveKnown = above != "" && Above != "";
+            bool belowKnown = below != "" && Below != "";
+            if (aboveKnown && belowKnown)
+            {
+                return Above == above && Below == below;
+            }
+            if (aboveKnown)
+            {
+                return Above == above;
+            }
+            return belowKnown && Below == below;
+        }
+    }
 
     private bool _busy;
     // 視窗正在關閉：還在跑的辨識回來後不要再碰畫面
@@ -606,7 +633,7 @@ public sealed class MainForm : Form
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
-            HashSet<string>? occurrence = null;
+            Occurrence? occurrence = null;
             if (match.IsMatch && match.IsVariant)
             {
                 // 記住這一個同名列的上下鄰居，分辨是不是之前看過的那一個
@@ -885,52 +912,39 @@ public sealed class MainForm : Form
         }
     }
 
-    // 比對用的名稱拿掉結尾數字（「圓犁頭鰩2」→「圓犁頭鰩」），判斷鄰居是不是同一組
-    private static string BaseKey(string name) => Regex.Replace(NameMatcher.Normalize(name), @"[0-9]+$", "");
-
     /// <summary>
-    /// 記下同名組裡的一列（上下鄰居的名稱）。和之前看過的任何一個有共同的鄰居，就是同一個；
-    /// 都沒有就是新的一個。捲動時鄰居不會變（變的只是在畫面上的位置），到了頁面邊緣也還有一邊的鄰居對得上。
-    /// 鄰居是同一組的（照名稱排列時同名的排在一起）不算，兩邊都沒有鄰居時無法分辨，不記。
+    /// 找出同名組裡這一列的身分（上下鄰居是 above、below）：和之前看過的某一個是同一列就回傳它（順便補上新看到的那一邊），
+    /// 都不是就記成新的一個。above、below 都是已確定的名稱（ConfidentName），兩邊都沒有時無法辨識，回傳 null。
+    /// 比對規則和 SamePosition 一樣：兩邊都知道時兩邊都要相同，只共用一個鄰居的兩列不會被當成同一列。
     /// </summary>
-    private HashSet<string>? RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
+    private Occurrence? RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
     {
-        string groupBase = BaseKey(variants[0].Name);
-        string[] neighbors = [above, below];
-        HashSet<string> keys = [.. neighbors
-            .Where(n => n != "" && n != "（讀不出來）" && BaseKey(n) != groupBase)
-            .Select(NameMatcher.Normalize)];
-        if (keys.Count == 0)
+        if (above == "" && below == "")
         {
             return null;
         }
-        if (!_variantOccurrences.TryGetValue(variants[0], out List<HashSet<string>>? list))
+        if (!_variantOccurrences.TryGetValue(variants[0], out List<Occurrence>? list))
         {
             list = [];
             _variantOccurrences[variants[0]] = list;
         }
-        List<HashSet<string>> hits = [.. list.Where(o => o.Overlaps(keys))];
-        if (hits.Count == 0)
+        Occurrence? hit = list.FirstOrDefault(o => o.Matches(above, below));
+        if (hit is null)
         {
-            list.Add(keys);
-            return keys;
+            hit = new Occurrence { Above = above, Below = below };
+            list.Add(hit);
+            return hit;
         }
-        // 對到一個以上（這次的鄰居把之前分開記的兩筆接起來了）：併成一筆，連到它們的清單項目改連到合併後的
-        hits[0].UnionWith(keys);
-        foreach (HashSet<string> extra in hits.Skip(1))
+        // 補上之前不知道的那一邊
+        if (hit.Above == "")
         {
-            hits[0].UnionWith(extra);
-            list.Remove(extra);
-            foreach (Found f in _matched.Values.Where(f => f.Occurrence == extra))
-            {
-                f.Occurrence = hits[0];
-            }
-            if (_removedOccurrences.Remove(extra))
-            {
-                _removedOccurrences.Add(hits[0]);
-            }
+            hit.Above = above;
         }
-        return hits[0];
+        if (hit.Below == "")
+        {
+            hit.Below = below;
+        }
+        return hit;
     }
 
     // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
@@ -1020,15 +1034,26 @@ public sealed class MainForm : Form
 
     /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
     private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item,
-        HashSet<string>? occurrence)
+        Occurrence? occurrence)
     {
         if (_matched.TryGetValue(item, out Found? existing))
         {
+            // 這個發現物已經在清單上（可能是「同名，請確認」先記下的）：功績判斷出它確實被發現了，可以確定下來
             existing.Occurrence ??= occurrence;
+            bool changed = false;
+            if (existing.VariantUnsure && !existing.Manual)
+            {
+                existing.VariantUnsure = false;
+                changed = true;
+            }
             if (hasCard && !existing.HasCard && !existing.Manual)
             {
                 existing.HasCard = true;
-                UpdateRow(existing, resetCheck: false);
+                changed = true;
+            }
+            if (changed)
+            {
+                UpdateRow(existing, resetCheck: true);
             }
             return false;
         }
@@ -1037,11 +1062,10 @@ public sealed class MainForm : Form
         {
             return false;
         }
-        // 之前用「同名，請確認」先記下的那一筆（還不知道是哪一個）：就是這一個，改過去，不要多加一筆。
-        // 先找同一個身分的，再找還沒有身分的（別的身分是另一列，不能拿來改）
-        Found? unsure = _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && occurrence is not null && f.Occurrence == occurrence)
-                        ?? _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Occurrence is null
-                                                               && f.Item is not null && match.Variants.Contains(f.Item));
+        // 同一個身分之前用「同名，請確認」先記下的那一筆：就是這一列，改成功績判斷出來的那一個。
+        // 只改同一個身分的；沒有身分的那一筆可能是另一列，不能拿來改（改錯會把另一隻變成已確定並預設寫入）
+        Found? unsure = occurrence is null ? null
+            : _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Occurrence == occurrence);
         if (unsure is not null)
         {
             DetachFound(unsure);
@@ -1080,8 +1104,8 @@ public sealed class MainForm : Form
         _variantSuppressed.TryGetValue(first, out int suppressed);
 
         // 每一個實際看到的列對應清單上的一筆，不會因為鄰居數出幾個就一次補滿：
-        //   - 有身分（上下鄰居）的列：同一個身分已經有一筆就不再加；之前沒身分時加的那一筆，連到這個身分
-        //   - 沒有身分的列：只靠「同一頁同時看到幾個」
+        //   - 有身分（上下鄰居）的列：同一個身分已經有一筆就不再加，新的身分就加一筆
+        //   - 沒有身分的列：沒有身分的筆數不超過「同一頁同時看到幾個」
         int added = 0;
         foreach (VariantRow row in rows)
         {
@@ -1101,21 +1125,16 @@ public sealed class MainForm : Form
                     }
                     continue;
                 }
-                // 之前沒有鄰居時加的那一筆，可能就是這一列：連起來，不要多加
-                Found? anonymous = members.FirstOrDefault(f => f.Occurrence is null);
-                if (anonymous is not null)
-                {
-                    anonymous.Occurrence = row.Occurrence;
-                    continue;
-                }
+                // 新的身分：加一筆新的「同名，請確認」。不要寫進之前沒有身分的那一筆——那可能是另一列，
+                // 寫進去會讓這一列靜靜漏掉。同一列先沒鄰居、後來有鄰居，最多暫時變成兩筆「請確認」（少算一隻比較嚴重）
                 if (present >= variants.Count)
                 {
                     continue;
                 }
             }
-            else if (present >= together)
+            else if (members.Count(f => f.Occurrence is null) + suppressed >= together)
             {
-                continue;
+                continue; // 沒有鄰居的列：沒有身分的筆數已經和這一頁同時看到的一樣多了
             }
 
             DiscoveryItem? item = variants.FirstOrDefault(v => !_matched.ContainsKey(v));
