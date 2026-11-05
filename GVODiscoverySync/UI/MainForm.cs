@@ -495,9 +495,19 @@ public sealed class MainForm : Form
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
+        // 依價值排列的頁面：同名的列用上下鄰居的功績直接判斷是組裡的哪一個（同名的各個功績都不同）
+        bool byValue = IsSortedByValue(picks);
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
+            {
+                if (AddVariantExact(category, text, row.HasCard, match, exact))
+                {
+                    added++;
+                }
+                continue;
+            }
             if (row.Readings.Count == 0 && !match.IsMatch)
             {
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
@@ -670,9 +680,90 @@ public sealed class MainForm : Form
         }
     }
 
+    // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
+    private static bool IsAnchor((ListRow Row, string Text, MatchResult Match) p)
+        => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item is { Merit: > 0 };
+
     /// <summary>
-    /// 同名的一組（例如「聖母加冠1」「聖母加冠2」，遊戲上都叫「聖母加冠」）：
-    /// 同一頁看到幾個，就是組裡前幾個都發現了。全部看到才確定；只看到一部分時分不出是哪一個，標成「同名，請確認」。
+    /// 這一頁是不是「依價值排列」：已確定的列至少 4 個，功績由高到低（可以相等）。
+    /// 照名稱排列時功績是亂的，不會符合。
+    /// </summary>
+    private static bool IsSortedByValue(List<(ListRow Row, string Text, MatchResult Match)> picks)
+    {
+        List<int> merits = [.. picks.Where(IsAnchor).Select(p => p.Match.Item!.Merit)];
+        return merits.Count >= 4 && merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
+    }
+
+    /// <summary>
+    /// 依價值排列時，同名的列是組裡的哪一個：功績要介於上一個、下一個已確定的列之間。
+    /// 只有一個符合時回傳它；判斷不出來（上下都沒有已確定的列、或符合的不只一個）回傳 null。
+    /// </summary>
+    private static DiscoveryItem? PickVariantByMerit(List<(ListRow Row, string Text, MatchResult Match)> picks, int index,
+        IReadOnlyList<DiscoveryItem> variants)
+    {
+        int? above = null, below = null;
+        for (int j = index - 1; j >= 0 && above is null; j--)
+        {
+            if (IsAnchor(picks[j]))
+            {
+                above = picks[j].Match.Item!.Merit;
+            }
+        }
+        for (int j = index + 1; j < picks.Count && below is null; j++)
+        {
+            if (IsAnchor(picks[j]))
+            {
+                below = picks[j].Match.Item!.Merit;
+            }
+        }
+        if (above is null && below is null)
+        {
+            return null;
+        }
+        // 由高到低：上一列的功績 ≥ 這一列 ≥ 下一列（只知道一邊時，另一邊不限）
+        int high = above ?? int.MaxValue;
+        int low = below ?? int.MinValue;
+        List<DiscoveryItem> fit = [.. variants.Where(v => v.Merit <= high && v.Merit >= low)];
+        return fit.Count == 1 ? fit[0] : null;
+    }
+
+    /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
+    private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item)
+    {
+        if (_matched.TryGetValue(item, out Found? existing))
+        {
+            if (hasCard && !existing.HasCard && !existing.Manual)
+            {
+                existing.HasCard = true;
+                UpdateRow(existing, resetCheck: false);
+            }
+            return false;
+        }
+        // 之前用「同名，請確認」先記下的那一筆（還不知道是哪一個）：就是這一個，改過去，不要多加一筆
+        Found? unsure = _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Item is not null && match.Variants.Contains(f.Item));
+        if (unsure is not null)
+        {
+            DetachFound(unsure);
+            unsure.Assigned = item;
+            unsure.VariantUnsure = false;
+            unsure.HasCard |= hasCard;
+            _matched[item] = unsure;
+            UpdateRow(unsure, resetCheck: true);
+            return false;
+        }
+
+        Found found = new()
+        {
+            Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item,
+        };
+        _matched[item] = found;
+        AddView(found);
+        return true;
+    }
+
+    /// <summary>
+    /// 同名的一組（例如「聖母加冠1」「聖母加冠2」，遊戲上都叫「聖母加冠」）——照名稱排列的頁面用：
+    /// 照名稱排列時同名的排在一起，同一頁看到幾個，就是組裡前幾個都發現了。全部看到才確定；只看到一部分時分不出是哪一個，標成「同名，請確認」。
     /// 回傳新加入幾筆。
     /// </summary>
     private int AddVariants(string category, MatchResult match, List<(string Text, bool HasCard)> rows)
