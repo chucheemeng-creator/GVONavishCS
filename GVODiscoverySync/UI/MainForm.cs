@@ -56,6 +56,9 @@ public sealed class MainForm : Form
         /// <summary>讀到這一列時，這一頁是不是依價值排列（手動指定時才用功績範圍縮小候選）。</summary>
         public bool PageByValue { get; init; }
 
+        /// <summary>同名組的列：它是看過的哪一個（用上下鄰居辨識的身分），還不知道時是 null。</summary>
+        public HashSet<string>? Occurrence { get; set; }
+
         public string Note { get; init; } = "";
 
         /// <summary>
@@ -87,6 +90,10 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, int> _variantSuppressed = [];
     // 同名的一組 → 看過的每一個（用上下鄰居的名稱分辨：鄰居不同就是不同的一個）
     private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
+    // 使用者移除過的同名列的身分：之後再讀到同一個，不要加回來
+    private readonly HashSet<HashSet<string>> _removedOccurrences = [];
+    // 同名組的一列（AddVariants 用）
+    private sealed record VariantRow(string Text, bool HasCard, HashSet<string>? Occurrence);
 
     private bool _busy;
     // 視窗正在關閉：還在跑的辨識回來後不要再碰畫面
@@ -458,6 +465,8 @@ public sealed class MainForm : Form
         {
             _lastMask = null;
             _processedMask = null;
+            _retries = 0;
+            _retryMask = null;
             _timer.Start();
             SetStatus("讀取中…在遊戲裡慢慢捲動清單，每次停下來就會讀一次。");
         }
@@ -590,22 +599,27 @@ public sealed class MainForm : Form
     {
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
-        Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
+        Dictionary<DiscoveryItem, (MatchResult Match, List<VariantRow> Rows)> variantRows = [];
         // 依價值排列的頁面：同名的列用上下鄰居的功績直接判斷是組裡的哪一個（同名的各個功績都不同）
         _pageSort = DetectSort(picks); // 推斷完再判斷一次，已確定的列比較多
         bool byValue = _pageSort == SortMode.ByValue;
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            HashSet<string>? occurrence = null;
             if (match.IsMatch && match.IsVariant)
             {
                 // 記住這一個同名列的上下鄰居，分辨是不是之前看過的那一個
                 // 只用已確定的鄰居（Excel 的寫法）：同一個鄰居讀錯成兩種寫法時，才不會被當成兩個不同的
-                RegisterOccurrence(match.Variants, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1));
+                occurrence = RegisterOccurrence(match.Variants, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1));
+                if (occurrence is not null && _removedOccurrences.Contains(occurrence))
+                {
+                    continue; // 使用者移除過的那一個
+                }
             }
             if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
             {
-                if (AddVariantExact(category, text, row.HasCard, match, exact))
+                if (AddVariantExact(category, text, row.HasCard, match, exact, occurrence))
                 {
                     added++;
                 }
@@ -625,19 +639,19 @@ public sealed class MainForm : Form
             if (match.IsMatch && match.IsVariant)
             {
                 DiscoveryItem first = match.Variants[0];
-                if (!variantRows.TryGetValue(first, out (MatchResult Match, List<(string Text, bool HasCard)> Rows) group))
+                if (!variantRows.TryGetValue(first, out (MatchResult Match, List<VariantRow> Rows) group))
                 {
-                    group = (match, new List<(string Text, bool HasCard)>());
+                    group = (match, new List<VariantRow>());
                     variantRows[first] = group;
                 }
-                group.Rows.Add((text, row.HasCard));
+                group.Rows.Add(new VariantRow(text, row.HasCard, occurrence));
             }
             else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
             {
                 added++;
             }
         }
-        foreach ((MatchResult match, List<(string Text, bool HasCard)> rows) in variantRows.Values)
+        foreach ((MatchResult match, List<VariantRow> rows) in variantRows.Values)
         {
             added += AddVariants(category, match, rows);
         }
@@ -695,7 +709,7 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// 清掉過時的「找不到」「不確定」「讀不出來」：這一頁確定讀到的列，和它們在同一個位置（上一列或下一列相同），
+    /// 清掉過時的「找不到」「不確定」「讀不出來」：這一頁確定讀到的列，和它們在同一個位置（見 SamePosition），
     /// 表示那一筆就是這一列之前讀錯（或讀不出來）的結果。手動處理過的不動。
     /// </summary>
     private void RemoveStale(string category, List<(ListRow Row, string Text, MatchResult Match)> picks)
@@ -728,9 +742,11 @@ public sealed class MainForm : Form
         }
     }
 
-    // 一列的名稱（對得到 Excel 就用 Excel 的寫法，否則用讀到的）
+    // 一列的名稱（顯示用）：對得到 Excel 就用 Excel 的寫法；同名的一組用遊戲上的寫法（拿掉結尾數字），否則用讀到的
     private static string NameOf((ListRow Row, string Text, MatchResult Match) pick)
-        => pick.Match.Item?.Name ?? pick.Text;
+        => pick.Match.Item is DiscoveryItem item
+            ? (pick.Match.IsVariant ? NameMatcher.SortKey(item.Name) : item.Name)
+            : pick.Text;
 
     /// <summary>
     /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的。
@@ -738,7 +754,10 @@ public sealed class MainForm : Form
     /// </summary>
     private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow)
     {
-        string key = category + "\n?" + above + "|" + below;
+        // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
+        string key = confidentAbove != "" || confidentBelow != ""
+            ? category + "\n?" + confidentAbove + "|" + confidentBelow
+            : category + "\n?~" + above + "|" + below;
         if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key)
             || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
         {
@@ -874,7 +893,7 @@ public sealed class MainForm : Form
     /// 都沒有就是新的一個。捲動時鄰居不會變（變的只是在畫面上的位置），到了頁面邊緣也還有一邊的鄰居對得上。
     /// 鄰居是同一組的（照名稱排列時同名的排在一起）不算，兩邊都沒有鄰居時無法分辨，不記。
     /// </summary>
-    private void RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
+    private HashSet<string>? RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
     {
         string groupBase = BaseKey(variants[0].Name);
         string[] neighbors = [above, below];
@@ -883,7 +902,7 @@ public sealed class MainForm : Form
             .Select(NameMatcher.Normalize)];
         if (keys.Count == 0)
         {
-            return;
+            return null;
         }
         if (!_variantOccurrences.TryGetValue(variants[0], out List<HashSet<string>>? list))
         {
@@ -894,15 +913,24 @@ public sealed class MainForm : Form
         if (hits.Count == 0)
         {
             list.Add(keys);
-            return;
+            return keys;
         }
-        // 對到一個以上（這次的鄰居把之前分開記的兩筆接起來了）：併成一筆
+        // 對到一個以上（這次的鄰居把之前分開記的兩筆接起來了）：併成一筆，連到它們的清單項目改連到合併後的
         hits[0].UnionWith(keys);
         foreach (HashSet<string> extra in hits.Skip(1))
         {
             hits[0].UnionWith(extra);
             list.Remove(extra);
+            foreach (Found f in _matched.Values.Where(f => f.Occurrence == extra))
+            {
+                f.Occurrence = hits[0];
+            }
+            if (_removedOccurrences.Remove(extra))
+            {
+                _removedOccurrences.Add(hits[0]);
+            }
         }
+        return hits[0];
     }
 
     // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
@@ -991,10 +1019,12 @@ public sealed class MainForm : Form
     }
 
     /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
-    private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item)
+    private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item,
+        HashSet<string>? occurrence)
     {
         if (_matched.TryGetValue(item, out Found? existing))
         {
+            existing.Occurrence ??= occurrence;
             if (hasCard && !existing.HasCard && !existing.Manual)
             {
                 existing.HasCard = true;
@@ -1002,14 +1032,23 @@ public sealed class MainForm : Form
             }
             return false;
         }
-        // 之前用「同名，請確認」先記下的那一筆（還不知道是哪一個）：就是這一個，改過去，不要多加一筆
-        Found? unsure = _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Item is not null && match.Variants.Contains(f.Item));
+        // 這一個（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它
+        if (occurrence is not null && _matched.Values.Any(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)))
+        {
+            return false;
+        }
+        // 之前用「同名，請確認」先記下的那一筆（還不知道是哪一個）：就是這一個，改過去，不要多加一筆。
+        // 先找同一個身分的，再找還沒有身分的（別的身分是另一列，不能拿來改）
+        Found? unsure = _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && occurrence is not null && f.Occurrence == occurrence)
+                        ?? _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Occurrence is null
+                                                               && f.Item is not null && match.Variants.Contains(f.Item));
         if (unsure is not null)
         {
             DetachFound(unsure);
             unsure.Assigned = item;
             unsure.VariantUnsure = false;
             unsure.HasCard |= hasCard;
+            unsure.Occurrence ??= occurrence;
             _matched[item] = unsure;
             UpdateRow(unsure, resetCheck: true);
             return false;
@@ -1017,7 +1056,7 @@ public sealed class MainForm : Form
 
         Found found = new()
         {
-            Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item,
+            Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item, Occurrence = occurrence,
         };
         _matched[item] = found;
         AddView(found);
@@ -1029,66 +1068,81 @@ public sealed class MainForm : Form
     /// 照名稱排列時同名的排在一起，同一頁看到幾個，就是組裡前幾個都發現了。全部看到才確定；只看到一部分時分不出是哪一個，標成「同名，請確認」。
     /// 回傳新加入幾筆。
     /// </summary>
-    private int AddVariants(string category, MatchResult match, List<(string Text, bool HasCard)> rows)
+    private int AddVariants(string category, MatchResult match, List<VariantRow> rows)
     {
         IReadOnlyList<DiscoveryItem> variants = match.Variants;
         DiscoveryItem first = variants[0];
-        // 看過幾個：同一頁同時看到的個數（照名稱排列時同名的排在一起；確定），
-        // 或是用鄰居分辨出來的個數（依價值排列時同名的分散在不同頁；鄰居可能認錯，只當線索），取大的。
-        // 只有同一頁同時看到全部時才當成確定；靠鄰居數出來的，新加的標「同名，請確認」、預設不勾
+        // 同一頁同時看到幾個（照名稱排列時同名的排在一起）：同時看到全部才算確定
         _variantSeen.TryGetValue(first, out int before);
         int together = Math.Max(before, Math.Min(rows.Count, variants.Count));
         _variantSeen[first] = together;
-        int occurrences = _variantOccurrences.TryGetValue(first, out List<HashSet<string>>? occ) ? occ.Count : 0;
-        int seen = Math.Min(variants.Count, Math.Max(together, occurrences));
         bool complete = together >= variants.Count;
-
-        // 有卡片的資訊：第 k 個看到的對應組裡第 k 個（手動指定過的不動）
-        for (int k = 0; k < Math.Min(rows.Count, variants.Count); k++)
-        {
-            if (rows[k].HasCard && _matched.TryGetValue(variants[k], out Found? existing) && !existing.Manual && !existing.HasCard)
-            {
-                existing.HasCard = true;
-                UpdateRow(existing, resetCheck: false);
-            }
-        }
-
-        // 用「個數」判斷要不要補：同一頁看到幾個，清單上這一組就要有幾筆。
-        // 已經在清單上的（自動對到的、手動指定的）和使用者移除的都算，
-        // 否則把「水鹿」手動改成「水鹿2」之後，下一次讀到又會補一個「水鹿」回來。
         _variantSuppressed.TryGetValue(first, out int suppressed);
-        int present = variants.Count(v => _matched.ContainsKey(v)) + suppressed;
+
+        // 每一個實際看到的列對應清單上的一筆，不會因為鄰居數出幾個就一次補滿：
+        //   - 有身分（上下鄰居）的列：同一個身分已經有一筆就不再加；之前沒身分時加的那一筆，連到這個身分
+        //   - 沒有身分的列：只靠「同一頁同時看到幾個」
         int added = 0;
-        int rowIndex = 0;
-        foreach (DiscoveryItem item in variants)
+        foreach (VariantRow row in rows)
         {
-            if (present >= seen)
+            List<Found> members = [.. variants.Where(_matched.ContainsKey).Select(v => _matched[v])];
+            int present = members.Count + suppressed;
+
+            if (row.Occurrence is not null)
             {
-                break;
+                // 同一個身分已經在清單上（可能被手動改成組外的發現物，所以整個清單找）
+                Found? linked = _matched.Values.FirstOrDefault(f => f.Occurrence == row.Occurrence);
+                if (linked is not null)
+                {
+                    if (row.HasCard && !linked.HasCard && !linked.Manual)
+                    {
+                        linked.HasCard = true;
+                        UpdateRow(linked, resetCheck: false);
+                    }
+                    continue;
+                }
+                // 之前沒有鄰居時加的那一筆，可能就是這一列：連起來，不要多加
+                Found? anonymous = members.FirstOrDefault(f => f.Occurrence is null);
+                if (anonymous is not null)
+                {
+                    anonymous.Occurrence = row.Occurrence;
+                    continue;
+                }
+                if (present >= variants.Count)
+                {
+                    continue;
+                }
             }
-            if (_matched.ContainsKey(item))
+            else if (present >= together)
             {
                 continue;
             }
-            (string text, bool hasCard) = rows[Math.Min(rowIndex++, rows.Count - 1)];
+
+            DiscoveryItem? item = variants.FirstOrDefault(v => !_matched.ContainsKey(v));
+            if (item is null)
+            {
+                continue;
+            }
             Found found = new()
             {
-                Category = category, ScreenText = text, Match = match, HasCard = hasCard,
-                Assigned = item, VariantUnsure = !complete,
+                Category = category, ScreenText = row.Text, Match = match, HasCard = row.HasCard,
+                Assigned = item, VariantUnsure = !complete, Occurrence = row.Occurrence,
             };
             _matched[item] = found;
             AddView(found);
-            present++;
             added++;
         }
 
-        // 這次才看齊全部的話，之前標成「同名，請確認」的改成確定（手動指定的本來就確定）
-        foreach (DiscoveryItem item in variants)
+        // 這次才同時看齊全部的話，之前標成「同名，請確認」的改成確定（手動指定的本來就確定）
+        if (complete)
         {
-            if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && complete && !f.Manual)
+            foreach (DiscoveryItem item in variants)
             {
-                f.VariantUnsure = false;
-                UpdateRow(f, resetCheck: true);
+                if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && !f.Manual)
+                {
+                    f.VariantUnsure = false;
+                    UpdateRow(f, resetCheck: true);
+                }
             }
         }
         return added;
@@ -1243,6 +1297,10 @@ public sealed class MainForm : Form
         if (f.Match.IsVariant)
         {
             Suppress(f.Match.Variants[0]); // 移除同名的一列：下次讀到不要補回來
+            if (f.Occurrence is not null)
+            {
+                _removedOccurrences.Add(f.Occurrence);
+            }
         }
         RememberResolved(f);
         DetachFound(f);
@@ -1382,6 +1440,9 @@ public sealed class MainForm : Form
         _resolvedKeys.Clear();
         _variantSuppressed.Clear();
         _variantOccurrences.Clear();
+        _removedOccurrences.Clear();
+        _retries = 0;
+        _retryMask = null;
         _list.Items.Clear();
         _processedMask = null;
         _lastMask = null;

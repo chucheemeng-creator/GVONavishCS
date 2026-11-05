@@ -4,9 +4,9 @@
 // 開啟時依「和畫面上讀到的文字有多像」排序，最像的在最上面；打字可以搜尋（包含這些字、或是很像的）。
 // 分類判斷錯了也可以換分類。對目前選的人物已經打勾的，狀態欄會註明。
 //
-// 讀不出來的列（沒有文字可以比）：照 Excel 的順序列出。
-// 遊戲的「依價值排列」就是依功績排序，所以讀不出來的那一個，功績一定介於上一列和下一列之間；
-// 功績在這個範圍、又還沒出現在清單上的用粗體標出來，並自動選到離上一列最近的那個。
+// 讀不出來的列（沒有文字可以比）：照 Excel 的順序列出，捲到上一列附近，但不預先選取（要自己看過名稱再選）。
+// 讀到這一列的那一頁是依價值排列、而且上下兩列都知道時：遊戲的「依價值排列」就是依功績排序，
+// 讀不出來的那一個功績一定介於上下兩列之間，功績在這個範圍、又還沒出現在清單上的用粗體標出來，並捲到最近的那個。
 // 已經在清單上（這次讀到過）的標「已在清單上」，避免重複選到。
 
 using System;
@@ -193,7 +193,8 @@ public sealed class ItemPickerForm : Form
                 meritHigh = Math.Max(a, b);
             }
         }
-        bool hasRange = excelOrder && _pageByValue && (aboveIndex >= 0 || belowIndex >= 0);
+        // 上下兩列都知道才標粗體：只知道一邊時範圍是「比上一列低的全部」，會有半張表是粗體，沒有意義
+        bool hasRange = excelOrder && _pageByValue && aboveIndex >= 0 && belowIndex >= 0;
         IEnumerable<(DiscoveryItem Item, double Score)> ordered = excelOrder
             ? rows
             : rows.OrderByDescending(r => r.Score).ThenBy(r => r.Item.Name, StringComparer.Ordinal).Take(MaxRows);
@@ -338,8 +339,9 @@ public sealed class ItemPickerForm : Form
         }
         else
         {
-            // 還沒選（讀不出來的列只捲到附近）：先選捲到的那一列
-            index = _list.FocusedItem?.Index ?? 0;
+            // 還沒選（讀不出來的列只捲到附近）：從焦點那一列往上或往下移一列
+            int focused = _list.FocusedItem?.Index ?? -1;
+            index = focused < 0 ? 0 : Math.Clamp(focused + (e.KeyCode == Keys.Down ? 1 : -1), 0, _list.Items.Count - 1);
         }
         _list.Items[index].Selected = true;
         _list.Items[index].EnsureVisible();
