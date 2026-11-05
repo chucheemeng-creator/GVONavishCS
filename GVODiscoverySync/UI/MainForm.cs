@@ -59,6 +59,12 @@ public sealed class MainForm : Form
         /// <summary>同名組的列：它是看過的哪一個（用上下鄰居辨識的身分），還不知道時是 null。</summary>
         public Occurrence? Occurrence { get; set; }
 
+        /// <summary>這一筆（原本屬於同名組）已經從組的筆數裡扣掉了（被移除、或手動改指定到組外）。</summary>
+        public bool VariantSuppressed { get; set; }
+
+        /// <summary>扣的時候它沒有身分，所以也算進了「沒有身分被移除」的筆數（扣回來時要一起扣回）。</summary>
+        public bool AnonymousCounted { get; set; }
+
         public string Note { get; init; } = "";
 
         /// <summary>
@@ -400,11 +406,16 @@ public sealed class MainForm : Form
         }
         // 先停止讀取、等正在跑的那一輪辨識結束，再抓要寫入的名單：
         // 不然確認視窗開著時，背景辨識還可能改動清單，畫面上看到的和實際寫入的會不一樣
-        bool wasRunning = await PauseReadingAsync();
+        (bool wasRunning, bool completed) = await PauseReadingAsync();
         try
         {
             if (_closing || IsDisposed)
             {
+                return;
+            }
+            if (!completed)
+            {
+                ShowStillBusy(); // 背景辨識還在跑，可能還會改動清單：這次不寫
                 return;
             }
             int character = Character;
@@ -466,9 +477,11 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// 停止讀取，並等正在跑的那一輪辨識結束（最多等 10 秒）。回傳原本是不是在讀取中，給 ResumeReading 用。
+    /// 停止讀取，並等正在跑的那一輪辨識結束（最多等 10 秒）。
+    /// WasRunning：原本是不是在讀取中（給 ResumeReading 用）；Completed：是不是真的等到辨識結束了。
+    /// 沒等到時呼叫端要取消這次操作（短名稱讀不出來時會多辨識好幾輪，有可能超過 10 秒）。
     /// </summary>
-    private async Task<bool> PauseReadingAsync()
+    private async Task<(bool WasRunning, bool Completed)> PauseReadingAsync()
     {
         bool wasRunning = _timer.Enabled;
         _timer.Stop();
@@ -476,7 +489,16 @@ public sealed class MainForm : Form
         {
             await Task.Delay(50);
         }
-        return wasRunning;
+        return (wasRunning, !_busy);
+    }
+
+    // 等不到辨識結束時的提示
+    private void ShowStillBusy()
+    {
+        if (!_closing && !IsDisposed)
+        {
+            MessageBox.Show(this, "辨識還在進行中，請稍等一下再試一次。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     private void ResumeReading(bool wasRunning)
@@ -1267,9 +1289,14 @@ public sealed class MainForm : Form
             return;
         }
         // 選的時候暫停讀取，並等正在跑的那一輪辨識結束：不然背景讀到的結果可能改動這一筆
-        bool wasRunning = await PauseReadingAsync();
+        (bool wasRunning, bool completed) = await PauseReadingAsync();
         try
         {
+            if (!completed)
+            {
+                ShowStillBusy();
+                return;
+            }
             AssignCore(f);
         }
         finally
@@ -1311,14 +1338,8 @@ public sealed class MainForm : Form
 
         RememberResolved(f);
         // 同名的一組裡的一列改指定到組外：這一組少了一筆，記下來免得下次讀到又補回來
-        if (f.Match.IsVariant && !f.Match.Variants.Contains(item))
-        {
-            Suppress(f.Match.Variants[0]);
-            if (f.Occurrence is null)
-            {
-                AnonymousRemoved(f.Match.Variants[0]); // 沒有身分的列：沒有鄰居的列靠這個數，否則會被補回來
-            }
-        }
+        // 原本屬於同名組的列：改指定到組外就從組的筆數扣掉，改回組內就扣回來（每一筆最多扣一次）
+        SetVariantSuppressed(f, f.Match.IsVariant && !f.Match.Variants.Contains(item));
         DetachFound(f);
         f.Assigned = item;
         f.Category = item.Category;
@@ -1366,30 +1387,43 @@ public sealed class MainForm : Form
         }
     }
 
-    private void AnonymousRemoved(DiscoveryItem first)
+    /// <summary>
+    /// 設定這一筆（原本屬於同名組）有沒有從組的筆數扣掉。狀態有變才改計數：
+    /// 沒扣 → 扣：組的筆數 +1（沒有身分的話「沒有身分被移除」也 +1）；扣 → 沒扣：扣回來。
+    /// 同一筆改指定到組外、再移除，只會扣一次；改回組內會恢復。
+    /// </summary>
+    private void SetVariantSuppressed(Found f, bool suppressed)
     {
-        _anonymousRemoved.TryGetValue(first, out int n);
-        _anonymousRemoved[first] = n + 1;
-    }
-
-    private void Suppress(DiscoveryItem first)
-    {
-        _variantSuppressed.TryGetValue(first, out int n);
-        _variantSuppressed[first] = n + 1;
+        if (!f.Match.IsVariant || f.VariantSuppressed == suppressed)
+        {
+            return;
+        }
+        DiscoveryItem first = f.Match.Variants[0];
+        int delta = suppressed ? 1 : -1;
+        if (suppressed)
+        {
+            f.AnonymousCounted = f.Occurrence is null;
+        }
+        _variantSuppressed[first] = Math.Max(0, _variantSuppressed.GetValueOrDefault(first) + delta);
+        if (f.AnonymousCounted)
+        {
+            _anonymousRemoved[first] = Math.Max(0, _anonymousRemoved.GetValueOrDefault(first) + delta);
+        }
+        if (!suppressed)
+        {
+            f.AnonymousCounted = false;
+        }
+        f.VariantSuppressed = suppressed;
     }
 
     private void RemoveFound(Found f)
     {
         if (f.Match.IsVariant)
         {
-            Suppress(f.Match.Variants[0]); // 移除同名的一列：下次讀到不要補回來
+            SetVariantSuppressed(f, true); // 移除同名的一列：下次讀到不要補回來（之前改指定到組外時已經扣過，不會重複扣）
             if (f.Occurrence is not null)
             {
                 _removedOccurrences.Add(f.Occurrence);
-            }
-            else
-            {
-                AnonymousRemoved(f.Match.Variants[0]);
             }
         }
         RememberResolved(f);
