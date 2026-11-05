@@ -239,12 +239,14 @@ public sealed class MainForm : Form
         ContextMenuStrip menu = new();
         ToolStripMenuItem assignItem = new("指定 Excel 發現物…", null, async (_, _) => await AssignSelectedAsync()) { ShortcutKeyDisplayString = "Enter" };
         ToolStripMenuItem removeItem = new("移除這一筆", null, (_, _) => RemoveSelected()) { ShortcutKeyDisplayString = "Delete" };
-        menu.Items.AddRange([assignItem, removeItem]);
+        ToolStripMenuItem copyItem = new("複製遊戲畫面上的名稱", null, (_, _) => CopyScreenText()) { ShortcutKeyDisplayString = "Ctrl+C" };
+        menu.Items.AddRange([assignItem, removeItem, new ToolStripSeparator(), copyItem]);
         menu.Opening += (_, e) =>
         {
             bool has = SelectedFound is not null;
             assignItem.Enabled = has && _book is not null;
             removeItem.Enabled = has;
+            copyItem.Enabled = SelectedScreenTexts().Count > 0;
             e.Cancel = !has;
         };
         _list.ContextMenuStrip = menu;
@@ -258,6 +260,11 @@ public sealed class MainForm : Form
             else if (e.KeyCode == Keys.Delete)
             {
                 RemoveSelected();
+                e.Handled = true;
+            }
+            else if (e.Control && e.KeyCode is Keys.C or Keys.Insert)
+            {
+                CopyScreenText();
                 e.Handled = true;
             }
         };
@@ -1320,6 +1327,35 @@ public sealed class MainForm : Form
         _matched[item] = f;
         UpdateRow(f, resetCheck: true);
         UpdateSummary();
+    }
+
+    // 選取的列（可以多選）在遊戲畫面上讀到的文字；讀不出來的列沒有文字，不算
+    private List<string> SelectedScreenTexts()
+        => [.. _list.SelectedItems.Cast<ListViewItem>()
+            .Select(v => v.Tag as Found)
+            .Where(f => f is not null && !f.Unreadable && f.ScreenText != "")
+            .Select(f => f!.ScreenText)];
+
+    /// <summary>
+    /// 複製選取的列「遊戲畫面上的名稱」（辨識讀到的原文，多選時一行一個）。
+    /// 常讀錯的字可以直接貼進設定檔的錯字對照表，不用猜是哪個字（例如「冫」）。
+    /// </summary>
+    private void CopyScreenText()
+    {
+        List<string> texts = SelectedScreenTexts();
+        if (texts.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(string.Join(Environment.NewLine, texts));
+            SetStatus(texts.Count == 1 ? $"已複製：{texts[0]}" : $"已複製 {texts.Count} 筆遊戲畫面上的名稱。");
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            SetStatus("複製失敗：剪貼簿正在被其他程式使用，請再試一次。");
+        }
     }
 
     private void RemoveSelected()
