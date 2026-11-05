@@ -92,6 +92,8 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, List<Occurrence>> _variantOccurrences = [];
     // 使用者移除過的同名列的身分：之後再讀到同一個，不要加回來
     private readonly HashSet<Occurrence> _removedOccurrences = [];
+    // 同名的一組 → 使用者移除的「沒有身分」的筆數（沒有鄰居的列，補的時候要算進去）
+    private readonly Dictionary<DiscoveryItem, int> _anonymousRemoved = [];
     // 同名組的一列（AddVariants 用）
     private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence);
 
@@ -1038,24 +1040,34 @@ public sealed class MainForm : Form
     {
         if (_matched.TryGetValue(item, out Found? existing))
         {
-            // 這個發現物已經在清單上（可能是「同名，請確認」先記下的）：功績判斷出它確實被發現了，可以確定下來
-            existing.Occurrence ??= occurrence;
-            bool changed = false;
-            if (existing.VariantUnsure && !existing.Manual)
+            // 這個發現物已經在清單上。同名組的列一開始是依序填空位，那一筆不一定就是這一列，要先看身分：
+            if (occurrence is not null && existing.Occurrence == occurrence)
             {
-                existing.VariantUnsure = false;
-                changed = true;
+                // 就是這一列：確定下來
+                if (!existing.Manual && (existing.VariantUnsure || (hasCard && !existing.HasCard)))
+                {
+                    existing.VariantUnsure = false;
+                    existing.HasCard |= hasCard;
+                    UpdateRow(existing, resetCheck: true);
+                }
+                return false;
             }
-            if (hasCard && !existing.HasCard && !existing.Manual)
+            if (existing.Manual || !existing.VariantUnsure)
             {
-                existing.HasCard = true;
-                changed = true;
+                return false; // 手動指定的、已經確定的：不動
             }
-            if (changed)
+            // 那一筆是別的列（或還沒有身分），只是先佔了這個位置：把它移到組裡還空著的位置（仍然「請確認」），
+            // 這個發現物留給這一列。組裡沒有空位時那一筆不動（這一列就不另外加）
+            DiscoveryItem? free = match.Variants.FirstOrDefault(v => !_matched.ContainsKey(v));
+            if (free is null)
             {
-                UpdateRow(existing, resetCheck: true);
+                return false;
             }
-            return false;
+            DetachFound(existing);
+            existing.Assigned = free;
+            _matched[free] = existing;
+            UpdateRow(existing, resetCheck: true);
+            // 往下走：為這一列新增一筆確定的
         }
         // 這一個（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它
         if (occurrence is not null && _matched.Values.Any(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)))
@@ -1102,6 +1114,7 @@ public sealed class MainForm : Form
         _variantSeen[first] = together;
         bool complete = together >= variants.Count;
         _variantSuppressed.TryGetValue(first, out int suppressed);
+        _anonymousRemoved.TryGetValue(first, out int anonymousRemoved);
 
         // 每一個實際看到的列對應清單上的一筆，不會因為鄰居數出幾個就一次補滿：
         //   - 有身分（上下鄰居）的列：同一個身分已經有一筆就不再加，新的身分就加一筆
@@ -1132,9 +1145,9 @@ public sealed class MainForm : Form
                     continue;
                 }
             }
-            else if (members.Count(f => f.Occurrence is null) + suppressed >= together)
+            else if (members.Count(f => f.Occurrence is null) + anonymousRemoved >= together)
             {
-                continue; // 沒有鄰居的列：沒有身分的筆數已經和這一頁同時看到的一樣多了
+                continue; // 沒有鄰居的列：沒有身分的筆數（含移除的）已經和這一頁同時看到的一樣多了
             }
 
             DiscoveryItem? item = variants.FirstOrDefault(v => !_matched.ContainsKey(v));
@@ -1320,6 +1333,11 @@ public sealed class MainForm : Form
             {
                 _removedOccurrences.Add(f.Occurrence);
             }
+            else
+            {
+                _anonymousRemoved.TryGetValue(f.Match.Variants[0], out int n);
+                _anonymousRemoved[f.Match.Variants[0]] = n + 1;
+            }
         }
         RememberResolved(f);
         DetachFound(f);
@@ -1460,6 +1478,7 @@ public sealed class MainForm : Form
         _variantSuppressed.Clear();
         _variantOccurrences.Clear();
         _removedOccurrences.Clear();
+        _anonymousRemoved.Clear();
         _retries = 0;
         _retryMask = null;
         _list.Items.Clear();
