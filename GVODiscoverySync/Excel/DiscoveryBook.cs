@@ -143,6 +143,7 @@ public sealed class DiscoveryBook
             markColumns[i] = column;
         }
         columnByHeader.TryGetValue("ID", out string? idColumn);
+        columnByHeader.TryGetValue("功績", out string? meritColumn);
 
         List<DiscoveryItem> items = [];
         foreach (Row row in data.Elements<Row>())
@@ -182,7 +183,14 @@ public sealed class DiscoveryBook
                 int.TryParse(GetText(idCell, strings), NumberStyles.Integer, CultureInfo.InvariantCulture, out id);
             }
 
-            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id };
+            int merit = 0;
+            if (meritColumn is not null && cells.TryGetValue(meritColumn, out Cell? meritCell)
+                && double.TryParse(GetText(meritCell, strings), NumberStyles.Float, CultureInfo.InvariantCulture, out double m))
+            {
+                merit = (int)Math.Round(m);
+            }
+
+            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit };
             for (int i = 0; i < CharacterCount; i++)
             {
                 item.Marked[i] = cells.TryGetValue(markColumns[i], out Cell? markCell) && GetText(markCell, strings).Trim() == Mark;

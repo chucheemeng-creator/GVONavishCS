@@ -17,6 +17,9 @@ public sealed class DiscoveryItem
     /// <summary>ID 欄的值，沒有時是 0。</summary>
     public int Id { get; init; }
 
+    /// <summary>功績欄的值，沒有時是 0。遊戲裡「依價值排列」就是依這個排。</summary>
+    public int Merit { get; init; }
+
     /// <summary>人物 1～5 是否已經打勾（索引 0～4）。</summary>
     public bool[] Marked { get; } = new bool[DiscoveryBook.CharacterCount];
 

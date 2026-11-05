@@ -55,6 +55,10 @@ public sealed class MainForm : Form
 
         public string Note { get; init; } = "";
 
+        /// <summary>讀不出來的列：上一列、下一列的名稱（手動指定時用來捲到附近）。</summary>
+        public string Above { get; init; } = "";
+        public string Below { get; init; } = "";
+
         public DiscoveryItem? Item => Assigned ?? Match.Item;
     }
 
@@ -551,7 +555,7 @@ public sealed class MainForm : Form
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note, UnmatchedKey = key,
+            Unreadable = true, Note = note, UnmatchedKey = key, Above = above, Below = below,
         };
         _unmatched[key] = found;
         AddView(found);
@@ -769,7 +773,8 @@ public sealed class MainForm : Form
             return;
         }
         string screen = f.Unreadable ? "" : f.ScreenText;
-        using ItemPickerForm dlg = new(_book, f.Category, screen, Character);
+        HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f)];
+        using ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem item)
         {
             return;
