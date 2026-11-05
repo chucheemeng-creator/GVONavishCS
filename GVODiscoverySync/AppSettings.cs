@@ -5,7 +5,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Unicode;
 using System.Text.Json.Serialization;
 using GVO.Common.IO;
 using GVODiscoverySync.Ocr;
@@ -57,6 +59,18 @@ public class AppSettings
     /// <summary>視窗置頂（F1 切換）。</summary>
     public bool TopMost { get; set; }
 
+    /// <summary>
+    /// 讀寫設定檔的選項：中文直接寫出來（不要變成 \uXXXX，才看得懂、改得了錯字對照表），
+    /// 讀的時候允許 // 註解和結尾多一個逗號（手動編輯時比較不會出錯）。
+    /// </summary>
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
     [JsonIgnore]
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.json");
 
@@ -92,7 +106,7 @@ public class AppSettings
         {
             if (File.Exists(FilePath))
             {
-                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath))
+                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOptions)
                     ?? throw new JsonException("設定檔內容是 null");
                 settings.Normalize();
                 return settings;
@@ -127,8 +141,7 @@ public class AppSettings
         }
         try
         {
-            JsonSerializerOptions options = new() { WriteIndented = true };
-            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, options));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, JsonOptions));
         }
         catch (Exception ex)
         {
