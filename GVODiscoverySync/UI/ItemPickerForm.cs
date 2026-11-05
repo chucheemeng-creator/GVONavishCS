@@ -225,7 +225,7 @@ public sealed class ItemPickerForm : Form
             }
             if (candidate)
             {
-                view.Font = new Font(_list.Font, FontStyle.Bold);
+                view.Font = BoldFont;
             }
             _list.Items.Add(view);
         }
@@ -257,6 +257,33 @@ public sealed class ItemPickerForm : Form
             _list.Items[select].EnsureVisible();
         }
         _btnOk.Enabled = _list.SelectedItems.Count > 0;
+    }
+
+    // 候選列用的粗體字（共用一個，不要每次 Fill 都建立新的 GDI 字型；
+    // 顯示縮放改變時清單的字型會跟著變，大小不同時重建）
+    private Font? _boldFont;
+
+    private Font BoldFont
+    {
+        get
+        {
+            if (_boldFont is null || _boldFont.Size != _list.Font.Size || _boldFont.FontFamily.Name != _list.Font.FontFamily.Name)
+            {
+                _boldFont?.Dispose();
+                _boldFont = new Font(_list.Font, FontStyle.Bold);
+            }
+            return _boldFont;
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _boldFont?.Dispose();
+            _boldFont = null;
+        }
+        base.Dispose(disposing);
     }
 
     // name 在 items 裡的位置：先找完全一樣的，再找最像的（上一列可能是辨識出來的文字，不是 Excel 的寫法）

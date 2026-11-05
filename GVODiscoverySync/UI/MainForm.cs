@@ -337,10 +337,7 @@ public sealed class MainForm : Form
     {
         _settings.Character = Character;
         // 換人物後「已打勾」的狀態不同，全部重新判斷（勾選回到預設）
-        foreach (Found f in _matched.Values.Concat(_unmatched.Values))
-        {
-            UpdateRow(f, resetCheck: true);
-        }
+        RefreshAllRows();
         UpdateSummary();
     }
 
@@ -374,10 +371,7 @@ public sealed class MainForm : Form
         {
             Cursor = Cursors.WaitCursor;
             string backup = _book.WriteMarks(character, items);
-            foreach (Found f in _matched.Values.Concat(_unmatched.Values))
-            {
-                UpdateRow(f, resetCheck: true);
-            }
+            RefreshAllRows();
             UpdateSummary();
             MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(backup)}",
                 Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1168,6 +1162,23 @@ public sealed class MainForm : Form
         foreach (DiscoveryItem key in _matched.Where(kv => kv.Value == f).Select(kv => kv.Key).ToList())
         {
             _matched.Remove(key);
+        }
+    }
+
+    // 全部重新判斷狀態（勾選回到預設）：換人物、寫入 Excel 後用。清單可能有幾百筆，暫停重繪一次更新完
+    private void RefreshAllRows()
+    {
+        _list.BeginUpdate();
+        try
+        {
+            foreach (Found f in _matched.Values.Concat(_unmatched.Values))
+            {
+                UpdateRow(f, resetCheck: true);
+            }
+        }
+        finally
+        {
+            _list.EndUpdate();
         }
     }
 

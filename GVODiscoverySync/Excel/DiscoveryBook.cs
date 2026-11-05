@@ -236,7 +236,14 @@ public sealed class DiscoveryBook
 
         string dir = Path.Combine(Path.GetDirectoryName(FilePath) ?? "", "backup");
         Directory.CreateDirectory(dir);
-        string backup = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(FilePath)}.bak-{DateTime.Now:yyyyMMdd-HHmmss}{Path.GetExtension(FilePath)}");
+        // 同一秒內連續寫入兩次時檔名會一樣：不要蓋掉（第一份才是寫入前的原檔），加上 -2、-3……
+        string stem = $"{Path.GetFileNameWithoutExtension(FilePath)}.bak-{DateTime.Now:yyyyMMdd-HHmmss}";
+        string ext = Path.GetExtension(FilePath);
+        string backup = Path.Combine(dir, stem + ext);
+        for (int n = 2; File.Exists(backup); n++)
+        {
+            backup = Path.Combine(dir, $"{stem}-{n}{ext}");
+        }
         File.Copy(FilePath, backup, false);
 
         using (SpreadsheetDocument doc = SpreadsheetDocument.Open(FilePath, true))
