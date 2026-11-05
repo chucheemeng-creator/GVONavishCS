@@ -613,6 +613,8 @@ public sealed class MainForm : Form
             return;
         }
         byte[] mask = _reader.TextMask(client, scale);
+        // 「畫面停了沒、讀過了沒、重試幾次」只給連續讀取用：用截圖檔測試（live＝false）不看也不改，
+        // 否則之後開始讀取時，畫面剛好和測試的截圖一樣就會被當成讀過了
         if (live)
         {
             bool stable = DiscoveryListReader.SameText(mask, _lastMask);
@@ -625,15 +627,10 @@ public sealed class MainForm : Form
             {
                 return; // 讀過了
             }
-        }
-        // 「已經讀過哪個畫面」只給連續讀取用：用截圖檔測試（live＝false）不要改它，
-        // 否則之後開始讀取時，畫面剛好和測試的截圖一樣就會被當成讀過了
-        if (live)
-        {
             _processedMask = mask;
             if (!ReferenceEquals(mask, _retryMask) && !DiscoveryListReader.SameText(mask, _retryMask))
             {
-                _retryMask = mask;
+                _retryMask = mask; // 換了一個畫面：重試次數重新算
                 _retries = 0;
             }
         }
