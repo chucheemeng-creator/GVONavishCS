@@ -110,6 +110,9 @@ public sealed class MainForm : Form
         }
         BuildUi();
         RestoreWindow();
+        TopMost = settings.TopMost;
+        UpdateTitle();
+        KeyPreview = true; // F1 在任何控制項上都有效
 
         _timer.Interval = _settings.IntervalMs;
         _timer.Tick += OnTimerTick;
@@ -119,7 +122,7 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = $"發現物同步 v{Application.ProductVersion.Split('+')[0]}";
+        UpdateTitle();
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Microsoft JhengHei UI", 9F);
         MinimumSize = new Size(640, 400);
@@ -1122,6 +1125,34 @@ public sealed class MainForm : Form
             StartPosition = FormStartPosition.Manual;
             Bounds = bounds;
         }
+    }
+
+    // 標題列：版本，置頂時加註
+    private void UpdateTitle()
+    {
+        Text = $"發現物同步 v{Application.ProductVersion.Split('+')[0]}{(TopMost ? "（置頂，F1 取消）" : "")}";
+    }
+
+    // F1：切換視窗置頂（遊戲在前面時也看得到清單和狀態）
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.F1)
+        {
+            TopMost = !TopMost;
+            _settings.TopMost = TopMost;
+            UpdateTitle();
+            SetStatus(TopMost ? "視窗置頂：開（再按 F1 取消）。注意不要擋住遊戲的清單。" : "視窗置頂：關。");
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            return;
+        }
+        base.OnKeyDown(e);
+    }
+
+    // F1 預設會觸發「說明」事件，這裡已經拿來切換置頂，不要再跳出說明
+    protected override void OnHelpRequested(HelpEventArgs hevent)
+    {
+        hevent.Handled = true;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

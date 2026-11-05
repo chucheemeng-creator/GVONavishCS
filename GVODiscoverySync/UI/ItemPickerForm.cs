@@ -61,7 +61,7 @@ public sealed class ItemPickerForm : Form
         MaximizeBox = false;
         ShowInTaskbar = false;
         MinimumSize = new Size(420, 360);
-        Size = new Size(520, 520);
+        Size = new Size(560, 520);
 
         TableLayoutPanel top = new()
         {
@@ -105,6 +105,7 @@ public sealed class ItemPickerForm : Form
         _list.MultiSelect = false;
         _list.HideSelection = false;
         _list.Columns.Add("Excel 上的名稱", 240);
+        _list.Columns.Add("★", 40, HorizontalAlignment.Center);
         _list.Columns.Add("功績", 60, HorizontalAlignment.Right);
         _list.Columns.Add("相似度", 60, HorizontalAlignment.Right);
         _list.Columns.Add("狀態", 100);
@@ -213,6 +214,7 @@ public sealed class ItemPickerForm : Form
             double shown = score > 1 ? score - 1 : score;
             ListViewItem view = new([
                 item.Name,
+                item.Stars,
                 item.Merit > 0 ? item.Merit.ToString(CultureInfo.InvariantCulture) : "",
                 search == "" && screen == "" ? "" : shown.ToString("0%", CultureInfo.InvariantCulture),
                 onList ? "已在清單上" : item.Marked[_character] ? "已經打勾" : "",

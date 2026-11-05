@@ -144,6 +144,7 @@ public sealed class DiscoveryBook
         }
         columnByHeader.TryGetValue("ID", out string? idColumn);
         columnByHeader.TryGetValue("功績", out string? meritColumn);
+        columnByHeader.TryGetValue("★", out string? starsColumn);
 
         List<DiscoveryItem> items = [];
         foreach (Row row in data.Elements<Row>())
@@ -190,7 +191,10 @@ public sealed class DiscoveryBook
                 merit = (int)Math.Round(m);
             }
 
-            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit };
+            string stars = starsColumn is not null && cells.TryGetValue(starsColumn, out Cell? starsCell)
+                ? GetText(starsCell, strings).Trim() : "";
+
+            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit, Stars = stars };
             for (int i = 0; i < CharacterCount; i++)
             {
                 item.Marked[i] = cells.TryGetValue(markColumns[i], out Cell? markCell) && GetText(markCell, strings).Trim() == Mark;
