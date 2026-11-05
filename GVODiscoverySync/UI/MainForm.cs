@@ -55,7 +55,10 @@ public sealed class MainForm : Form
 
         public string Note { get; init; } = "";
 
-        /// <summary>讀不出來的列：上一列、下一列的名稱（手動指定時用來捲到附近）。</summary>
+        /// <summary>
+        /// 對不到、讀不出來的列：上一列、下一列「已確定」的名稱（Excel 的寫法）。
+        /// 用來判斷之後讀對的列是不是同一個位置（是的話這一筆就過時了），手動指定時也用來捲到附近。
+        /// </summary>
         public string Above { get; init; } = "";
         public string Below { get; init; } = "";
 
@@ -525,7 +528,7 @@ public sealed class MainForm : Form
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
                 {
                     added++;
                 }
@@ -541,7 +544,7 @@ public sealed class MainForm : Form
                 }
                 group.Rows.Add((text, row.HasCard));
             }
-            else if (AddResult(category, text, row.HasCard, match))
+            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
             {
                 added++;
             }
@@ -550,6 +553,7 @@ public sealed class MainForm : Form
         {
             added += AddVariants(category, match, rows);
         }
+        RemoveStale(category, picks);
         int listed = _matched.Values.Count(f => f.Category == category);
         int total = 0;
         if (_book is not null && _book.Categories.TryGetValue(category, out List<DiscoveryItem>? items))
@@ -560,15 +564,61 @@ public sealed class MainForm : Form
         UpdateSummary();
     }
 
+    // 第 index 列已確定的話，它的 Excel 名稱；沒有這一列、或還不確定時是 ""
+    private static string ConfidentName(List<(ListRow Row, string Text, MatchResult Match)> picks, int index)
+        => index >= 0 && index < picks.Count && picks[index].Match.IsMatch ? picks[index].Match.Item!.Name : "";
+
+    // f 和「上一列是 above、下一列是 below」是不是清單上同一個位置（上一列或下一列相同就是）
+    private static bool SamePosition(Found f, string above, string below)
+        => (above != "" && f.Above == above) || (below != "" && f.Below == below);
+
+    /// <summary>
+    /// 清掉過時的「找不到」「不確定」「讀不出來」：這一頁確定讀到的列，和它們在同一個位置（上一列或下一列相同），
+    /// 表示那一筆就是這一列之前讀錯（或讀不出來）的結果。手動處理過的不動。
+    /// </summary>
+    private void RemoveStale(string category, List<(ListRow Row, string Text, MatchResult Match)> picks)
+    {
+        if (_unmatched.Count == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < picks.Count; i++)
+        {
+            if (!picks[i].Match.IsMatch)
+            {
+                continue;
+            }
+            string above = ConfidentName(picks, i - 1);
+            string below = ConfidentName(picks, i + 1);
+            if (above == "" && below == "")
+            {
+                continue;
+            }
+            List<Found> stale = [.. _unmatched.Values.Where(f => !f.Manual && f.Category == category && SamePosition(f, above, below))];
+            foreach (Found f in stale)
+            {
+                DetachFound(f);
+                if (f.View is not null)
+                {
+                    _list.Items.Remove(f.View);
+                }
+            }
+        }
+    }
+
     // 一列的名稱（對得到 Excel 就用 Excel 的寫法，否則用讀到的）
     private static string NameOf((ListRow Row, string Text, MatchResult Match) pick)
         => pick.Match.Item?.Name ?? pick.Text;
 
-    /// <summary>加入一筆「有字但讀不出來」的列。同一個位置（上下兩個發現物一樣）已經有了就回傳 false。</summary>
-    private bool AddUnreadable(string category, string above, string below)
+    /// <summary>
+    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的。
+    /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
+    /// </summary>
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow)
     {
         string key = category + "\n?" + above + "|" + below;
-        if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key))
+        if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key)
+            || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
         {
             return false;
         }
@@ -582,7 +632,7 @@ public sealed class MainForm : Form
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note, UnmatchedKey = key, Above = above, Below = below,
+            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow,
         };
         _unmatched[key] = found;
         AddView(found);
@@ -920,7 +970,8 @@ public sealed class MainForm : Form
     }
 
     /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
-    private bool AddResult(string category, string screenText, bool hasCard, MatchResult match)
+    private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
+        string confidentAbove = "", string confidentBelow = "")
     {
         if (_resolvedKeys.Contains(TextKey(category, screenText)))
         {
@@ -944,11 +995,17 @@ public sealed class MainForm : Form
         else
         {
             string key = TextKey(category, screenText);
-            if (_unmatched.ContainsKey(key))
+            // 同一個位置已經有一筆對不到的（同一列讀錯成不同的字）：不要重複
+            if (_unmatched.ContainsKey(key)
+                || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
             {
                 return false;
             }
-            found = new Found { Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key };
+            found = new Found
+            {
+                Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
+                Above = confidentAbove, Below = confidentBelow,
+            };
             _unmatched[key] = found;
         }
 
@@ -970,10 +1027,30 @@ public sealed class MainForm : Form
         }
         string screen = f.Unreadable ? "" : f.ScreenText;
         HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f)];
-        using ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below);
-        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem item)
+        DiscoveryItem? item;
+        // 選的時候暫停讀取：不然背景讀到的結果可能改動這一筆（例如同名的被自動改成組裡的另一個）
+        bool wasRunning = _timer.Enabled;
+        _timer.Stop();
+        try
         {
-            return;
+            using ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below);
+            if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is null)
+            {
+                return;
+            }
+            item = dlg.SelectedItem;
+        }
+        finally
+        {
+            if (wasRunning)
+            {
+                _lastMask = null; // 重新確認畫面停下來了再讀
+                _timer.Start();
+            }
+        }
+        if (item is null || f.View is null || !_list.Items.Contains(f.View))
+        {
+            return; // 這一筆在選的時候已經不在清單上了
         }
 
         if (_matched.TryGetValue(item, out Found? other) && other != f)
@@ -1367,6 +1444,17 @@ public sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // 還有勾選、但還沒寫入 Excel 的：問一下，免得辛苦讀的結果不見
+        int character = Character;
+        int pending = _matched.Values.Concat(_unmatched.Values)
+            .Count(f => f.View is { Checked: true } && f.Item is not null && !f.Item.Marked[character]);
+        if (pending > 0 && e.CloseReason == CloseReason.UserClosing
+            && MessageBox.Show(this, $"還有 {pending} 筆勾選的發現物沒有寫入 Excel，關閉後這次讀到的結果會不見。\n\n確定要關閉嗎？",
+                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK)
+        {
+            e.Cancel = true;
+            return;
+        }
         _timer.Stop();
         Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         _settings.WindowX = bounds.X;
