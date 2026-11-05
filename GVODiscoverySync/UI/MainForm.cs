@@ -55,6 +55,13 @@ public sealed class MainForm : Form
 
         public string Note { get; init; } = "";
 
+        /// <summary>
+        /// 對不到、讀不出來的列：上一列、下一列「已確定」的名稱（Excel 的寫法）。
+        /// 用來判斷之後讀對的列是不是同一個位置（是的話這一筆就過時了），手動指定時也用來捲到附近。
+        /// </summary>
+        public string Above { get; init; } = "";
+        public string Below { get; init; } = "";
+
         public DiscoveryItem? Item => Assigned ?? Match.Item;
     }
 
@@ -73,6 +80,10 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, int> _variantSeen = [];
     // 手動指定或移除過的列（分類＋畫面上的文字）：繼續捲動時又讀到同樣的文字，不要再加回來
     private readonly HashSet<string> _resolvedKeys = [];
+    // 同名的一組（以組裡第一個為代表）→ 使用者移除、或改指定到組外的筆數（補的時候要算進去）
+    private readonly Dictionary<DiscoveryItem, int> _variantSuppressed = [];
+    // 同名的一組 → 看過的每一個（用上下鄰居的名稱分辨：鄰居不同就是不同的一個）
+    private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
 
     private bool _busy;
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
@@ -106,6 +117,9 @@ public sealed class MainForm : Form
         }
         BuildUi();
         RestoreWindow();
+        TopMost = settings.TopMost;
+        UpdateTitle();
+        KeyPreview = true; // F1 在任何控制項上都有效
 
         _timer.Interval = _settings.IntervalMs;
         _timer.Tick += OnTimerTick;
@@ -115,7 +129,7 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = $"發現物同步 v{Application.ProductVersion.Split('+')[0]}";
+        UpdateTitle();
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Microsoft JhengHei UI", 9F);
         MinimumSize = new Size(640, 400);
@@ -345,7 +359,7 @@ public sealed class MainForm : Form
         }
         string name = _book.CharacterNames[character];
         if (MessageBox.Show(this,
-                $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先在同一個資料夾備份原檔。\n寫入時 Excel 必須是關閉的。",
+                $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先把原檔備份到 Excel 所在資料夾的 backup 資料夾。\n寫入時 Excel 必須是關閉的。",
                 Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
         {
             return;
@@ -362,7 +376,7 @@ public sealed class MainForm : Form
                 UpdateRow(f, resetCheck: true);
             }
             UpdateSummary();
-            MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\n{Path.GetFileName(backup)}",
+            MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(backup)}",
                 Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
@@ -481,20 +495,40 @@ public sealed class MainForm : Form
             (string text, MatchResult match) = PickBestReading(category, row);
             picks.Add((row, text, match));
         }
-        ResolveWithinPage(category, picks);
+        // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
+        SortMode mode = DetectSort(picks);
+        ResolveWithinPage(category, picks, mode == SortMode.ByName);
 
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
+        // 依價值排列的頁面：同名的列用上下鄰居的功績直接判斷是組裡的哪一個（同名的各個功績都不同）
+        bool byValue = DetectSort(picks) == SortMode.ByValue; // 推斷完再判斷一次，已確定的列比較多
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            if (match.IsMatch && match.IsVariant)
+            {
+                // 記住這一個同名列的上下鄰居，分辨是不是之前看過的那一個
+                // 只用已確定的鄰居（Excel 的寫法）：同一個鄰居讀錯成兩種寫法時，才不會被當成兩個不同的
+                RegisterOccurrence(match.Variants,
+                    i > 0 && picks[i - 1].Match.IsMatch ? picks[i - 1].Match.Item!.Name : "",
+                    i + 1 < picks.Count && picks[i + 1].Match.IsMatch ? picks[i + 1].Match.Item!.Name : "");
+            }
+            if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
+            {
+                if (AddVariantExact(category, text, row.HasCard, match, exact))
+                {
+                    added++;
+                }
+                continue;
+            }
             if (row.Readings.Count == 0 && !match.IsMatch)
             {
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
                 {
                     added++;
                 }
@@ -510,7 +544,7 @@ public sealed class MainForm : Form
                 }
                 group.Rows.Add((text, row.HasCard));
             }
-            else if (AddResult(category, text, row.HasCard, match))
+            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
             {
                 added++;
             }
@@ -519,6 +553,7 @@ public sealed class MainForm : Form
         {
             added += AddVariants(category, match, rows);
         }
+        RemoveStale(category, picks);
         int listed = _matched.Values.Count(f => f.Category == category);
         int total = 0;
         if (_book is not null && _book.Categories.TryGetValue(category, out List<DiscoveryItem>? items))
@@ -529,15 +564,61 @@ public sealed class MainForm : Form
         UpdateSummary();
     }
 
+    // 第 index 列已確定的話，它的 Excel 名稱；沒有這一列、或還不確定時是 ""
+    private static string ConfidentName(List<(ListRow Row, string Text, MatchResult Match)> picks, int index)
+        => index >= 0 && index < picks.Count && picks[index].Match.IsMatch ? picks[index].Match.Item!.Name : "";
+
+    // f 和「上一列是 above、下一列是 below」是不是清單上同一個位置（上一列或下一列相同就是）
+    private static bool SamePosition(Found f, string above, string below)
+        => (above != "" && f.Above == above) || (below != "" && f.Below == below);
+
+    /// <summary>
+    /// 清掉過時的「找不到」「不確定」「讀不出來」：這一頁確定讀到的列，和它們在同一個位置（上一列或下一列相同），
+    /// 表示那一筆就是這一列之前讀錯（或讀不出來）的結果。手動處理過的不動。
+    /// </summary>
+    private void RemoveStale(string category, List<(ListRow Row, string Text, MatchResult Match)> picks)
+    {
+        if (_unmatched.Count == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < picks.Count; i++)
+        {
+            if (!picks[i].Match.IsMatch)
+            {
+                continue;
+            }
+            string above = ConfidentName(picks, i - 1);
+            string below = ConfidentName(picks, i + 1);
+            if (above == "" && below == "")
+            {
+                continue;
+            }
+            List<Found> stale = [.. _unmatched.Values.Where(f => !f.Manual && f.Category == category && SamePosition(f, above, below))];
+            foreach (Found f in stale)
+            {
+                DetachFound(f);
+                if (f.View is not null)
+                {
+                    _list.Items.Remove(f.View);
+                }
+            }
+        }
+    }
+
     // 一列的名稱（對得到 Excel 就用 Excel 的寫法，否則用讀到的）
     private static string NameOf((ListRow Row, string Text, MatchResult Match) pick)
         => pick.Match.Item?.Name ?? pick.Text;
 
-    /// <summary>加入一筆「有字但讀不出來」的列。同一個位置（上下兩個發現物一樣）已經有了就回傳 false。</summary>
-    private bool AddUnreadable(string category, string above, string below)
+    /// <summary>
+    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的。
+    /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
+    /// </summary>
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow)
     {
         string key = category + "\n?" + above + "|" + below;
-        if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key))
+        if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key)
+            || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
         {
             return false;
         }
@@ -551,7 +632,7 @@ public sealed class MainForm : Form
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note, UnmatchedKey = key,
+            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow,
         };
         _unmatched[key] = found;
         AddView(found);
@@ -581,7 +662,7 @@ public sealed class MainForm : Form
     ///   2. 清單照名稱的字元編碼排序時（預設的排序；按 ⇅ 換過排序就不是），這一列一定排在上下已確定的兩列之間
     /// 排除之後只剩一個、或第一名明顯領先，就當成確定。新確定的列可以再幫忙推斷別列，所以最多做 3 輪。
     /// </summary>
-    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks)
+    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool sortedByName)
     {
         if (_matcher is null)
         {
@@ -596,7 +677,8 @@ public sealed class MainForm : Form
                 .Where(p => p.Match.IsMatch)
                 .Select(p => (p.Row.Index, p.Match.Item!.Name))];
             // 已確定的列至少 3 個、而且照編碼由小到大，才當成這一頁是照名稱排序
-            bool sorted = anchors.Count >= 3
+            // 這一頁照名稱排序（DetectSort 判斷的），而且新確定的列也沒有違反，才用上下列的順序排除候選
+            bool sorted = sortedByName
                           && anchors.Zip(anchors.Skip(1)).All(z => string.CompareOrdinal(z.First.Name, z.Second.Name) <= 0);
 
             bool changed = false;
@@ -661,34 +743,201 @@ public sealed class MainForm : Form
         }
     }
 
+    // 比對用的名稱拿掉結尾數字（「圓犁頭鰩2」→「圓犁頭鰩」），判斷鄰居是不是同一組
+    private static string BaseKey(string name) => Regex.Replace(NameMatcher.Normalize(name), @"[0-9]+$", "");
+
     /// <summary>
-    /// 同名的一組（例如「聖母加冠1」「聖母加冠2」，遊戲上都叫「聖母加冠」）：
-    /// 同一頁看到幾個，就是組裡前幾個都發現了。全部看到才確定；只看到一部分時分不出是哪一個，標成「同名，請確認」。
+    /// 記下同名組裡的一列（上下鄰居的名稱）。和之前看過的任何一個有共同的鄰居，就是同一個；
+    /// 都沒有就是新的一個。捲動時鄰居不會變（變的只是在畫面上的位置），到了頁面邊緣也還有一邊的鄰居對得上。
+    /// 鄰居是同一組的（照名稱排列時同名的排在一起）不算，兩邊都沒有鄰居時無法分辨，不記。
+    /// </summary>
+    private void RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
+    {
+        string groupBase = BaseKey(variants[0].Name);
+        string[] neighbors = [above, below];
+        HashSet<string> keys = [.. neighbors
+            .Where(n => n != "" && n != "（讀不出來）" && BaseKey(n) != groupBase)
+            .Select(NameMatcher.Normalize)];
+        if (keys.Count == 0)
+        {
+            return;
+        }
+        if (!_variantOccurrences.TryGetValue(variants[0], out List<HashSet<string>>? list))
+        {
+            list = [];
+            _variantOccurrences[variants[0]] = list;
+        }
+        List<HashSet<string>> hits = [.. list.Where(o => o.Overlaps(keys))];
+        if (hits.Count == 0)
+        {
+            list.Add(keys);
+            return;
+        }
+        // 對到一個以上（這次的鄰居把之前分開記的兩筆接起來了）：併成一筆
+        hits[0].UnionWith(keys);
+        foreach (HashSet<string> extra in hits.Skip(1))
+        {
+            hits[0].UnionWith(extra);
+            list.Remove(extra);
+        }
+    }
+
+    // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
+    private static bool IsAnchor((ListRow Row, string Text, MatchResult Match) p)
+        => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item is { Merit: > 0 };
+
+    private enum SortMode { Unknown, ByValue, ByName }
+
+    // 記住的排序方式：遊戲的排序是一個設定（按 ⇅ 才會換），有一頁證據充分就記住，之後證據不足的頁面沿用
+    private SortMode _sortMode = SortMode.Unknown;
+
+    /// <summary>
+    /// 判斷這一頁的排序（依價值：功績由高到低；依名稱：字元編碼由小到大）。
+    ///   - 已確定的列至少 4 個、而且只符合其中一種：證據充分，記住這個排序方式
+    ///   - 至少 2 個、只符合其中一種：這一頁就是這種排序
+    ///   - 證據不足（例如發現物少、這一頁只有一兩個已確定的列，兩種都符合）：沒有矛盾就沿用記住的排序方式
+    /// 兩種都符合時不下判斷，免得誤判（列數少時常常兩種都符合）。
+    /// 用剛開始玩的玩家模擬過（只有 1%～3% 的發現物）：判斷不出來的時候有，但沒有判斷錯的。
+    /// </summary>
+    private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks)
+    {
+        List<int> merits = [.. picks.Where(IsAnchor).Select(p => p.Match.Item!.Merit)];
+        List<string> names = [.. picks.Where(p => p.Match.IsMatch).Select(p => p.Match.Item!.Name)];
+        bool valueOrdered = merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
+        bool nameOrdered = names.Zip(names.Skip(1)).All(z => string.CompareOrdinal(z.First, z.Second) <= 0);
+
+        bool value4 = valueOrdered && merits.Count >= 4, name4 = nameOrdered && names.Count >= 4;
+        if (value4 != name4)
+        {
+            _sortMode = value4 ? SortMode.ByValue : SortMode.ByName;
+        }
+
+        bool value2 = valueOrdered && merits.Count >= 2, name2 = nameOrdered && names.Count >= 2;
+        if (value2 != name2)
+        {
+            return value2 ? SortMode.ByValue : SortMode.ByName;
+        }
+        // 證據不足：這一頁沒有違反記住的排序就沿用
+        return _sortMode switch
+        {
+            SortMode.ByValue when valueOrdered => SortMode.ByValue,
+            SortMode.ByName when nameOrdered => SortMode.ByName,
+            _ => SortMode.Unknown,
+        };
+    }
+
+    /// <summary>
+    /// 依價值排列時，同名的列是組裡的哪一個：功績要介於上一個、下一個已確定的列之間。
+    /// 只有一個符合時回傳它；判斷不出來（上下都沒有已確定的列、或符合的不只一個）回傳 null。
+    /// </summary>
+    private static DiscoveryItem? PickVariantByMerit(List<(ListRow Row, string Text, MatchResult Match)> picks, int index,
+        IReadOnlyList<DiscoveryItem> variants)
+    {
+        int? above = null, below = null;
+        for (int j = index - 1; j >= 0 && above is null; j--)
+        {
+            if (IsAnchor(picks[j]))
+            {
+                above = picks[j].Match.Item!.Merit;
+            }
+        }
+        for (int j = index + 1; j < picks.Count && below is null; j++)
+        {
+            if (IsAnchor(picks[j]))
+            {
+                below = picks[j].Match.Item!.Merit;
+            }
+        }
+        if (above is null && below is null)
+        {
+            return null;
+        }
+        // 由高到低：上一列的功績 ≥ 這一列 ≥ 下一列（只知道一邊時，另一邊不限）
+        int high = above ?? int.MaxValue;
+        int low = below ?? int.MinValue;
+        List<DiscoveryItem> fit = [.. variants.Where(v => v.Merit <= high && v.Merit >= low)];
+        return fit.Count == 1 ? fit[0] : null;
+    }
+
+    /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
+    private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item)
+    {
+        if (_matched.TryGetValue(item, out Found? existing))
+        {
+            if (hasCard && !existing.HasCard && !existing.Manual)
+            {
+                existing.HasCard = true;
+                UpdateRow(existing, resetCheck: false);
+            }
+            return false;
+        }
+        // 之前用「同名，請確認」先記下的那一筆（還不知道是哪一個）：就是這一個，改過去，不要多加一筆
+        Found? unsure = _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Item is not null && match.Variants.Contains(f.Item));
+        if (unsure is not null)
+        {
+            DetachFound(unsure);
+            unsure.Assigned = item;
+            unsure.VariantUnsure = false;
+            unsure.HasCard |= hasCard;
+            _matched[item] = unsure;
+            UpdateRow(unsure, resetCheck: true);
+            return false;
+        }
+
+        Found found = new()
+        {
+            Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item,
+        };
+        _matched[item] = found;
+        AddView(found);
+        return true;
+    }
+
+    /// <summary>
+    /// 同名的一組（例如「聖母加冠1」「聖母加冠2」，遊戲上都叫「聖母加冠」）——照名稱排列的頁面用：
+    /// 照名稱排列時同名的排在一起，同一頁看到幾個，就是組裡前幾個都發現了。全部看到才確定；只看到一部分時分不出是哪一個，標成「同名，請確認」。
     /// 回傳新加入幾筆。
     /// </summary>
     private int AddVariants(string category, MatchResult match, List<(string Text, bool HasCard)> rows)
     {
         IReadOnlyList<DiscoveryItem> variants = match.Variants;
         DiscoveryItem first = variants[0];
+        // 看過幾個：同一頁同時看到的個數（照名稱排列時同名的排在一起），
+        // 或是用鄰居分辨出來的個數（依價值排列時同名的分散在不同頁），取大的
         _variantSeen.TryGetValue(first, out int before);
-        int seen = Math.Max(before, Math.Min(rows.Count, variants.Count));
+        int occurrences = _variantOccurrences.TryGetValue(first, out List<HashSet<string>>? occ) ? occ.Count : 0;
+        int seen = Math.Min(variants.Count, Math.Max(before, Math.Max(rows.Count, occurrences)));
         _variantSeen[first] = seen;
         bool complete = seen == variants.Count;
 
-        int added = 0;
-        for (int k = 0; k < seen; k++)
+        // 有卡片的資訊：第 k 個看到的對應組裡第 k 個（手動指定過的不動）
+        for (int k = 0; k < Math.Min(rows.Count, variants.Count); k++)
         {
-            DiscoveryItem item = variants[k];
-            (string text, bool hasCard) = rows[Math.Min(k, rows.Count - 1)];
-            if (_matched.TryGetValue(item, out Found? existing))
+            if (rows[k].HasCard && _matched.TryGetValue(variants[k], out Found? existing) && !existing.Manual && !existing.HasCard)
             {
-                if (hasCard && !existing.HasCard)
-                {
-                    existing.HasCard = true;
-                    UpdateRow(existing, resetCheck: false);
-                }
+                existing.HasCard = true;
+                UpdateRow(existing, resetCheck: false);
+            }
+        }
+
+        // 用「個數」判斷要不要補：同一頁看到幾個，清單上這一組就要有幾筆。
+        // 已經在清單上的（自動對到的、手動指定的）和使用者移除的都算，
+        // 否則把「水鹿」手動改成「水鹿2」之後，下一次讀到又會補一個「水鹿」回來。
+        _variantSuppressed.TryGetValue(first, out int suppressed);
+        int present = variants.Count(v => _matched.ContainsKey(v)) + suppressed;
+        int added = 0;
+        int rowIndex = 0;
+        foreach (DiscoveryItem item in variants)
+        {
+            if (present >= seen)
+            {
+                break;
+            }
+            if (_matched.ContainsKey(item))
+            {
                 continue;
             }
+            (string text, bool hasCard) = rows[Math.Min(rowIndex++, rows.Count - 1)];
             Found found = new()
             {
                 Category = category, ScreenText = text, Match = match, HasCard = hasCard,
@@ -696,13 +945,14 @@ public sealed class MainForm : Form
             };
             _matched[item] = found;
             AddView(found);
+            present++;
             added++;
         }
 
-        // 這次才看齊全部的話，之前標成「同名，請確認」的改成確定
+        // 這次才看齊全部的話，之前標成「同名，請確認」的改成確定（手動指定的本來就確定）
         foreach (DiscoveryItem item in variants)
         {
-            if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && complete)
+            if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && complete && !f.Manual)
             {
                 f.VariantUnsure = false;
                 UpdateRow(f, resetCheck: true);
@@ -720,7 +970,8 @@ public sealed class MainForm : Form
     }
 
     /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
-    private bool AddResult(string category, string screenText, bool hasCard, MatchResult match)
+    private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
+        string confidentAbove = "", string confidentBelow = "")
     {
         if (_resolvedKeys.Contains(TextKey(category, screenText)))
         {
@@ -744,11 +995,17 @@ public sealed class MainForm : Form
         else
         {
             string key = TextKey(category, screenText);
-            if (_unmatched.ContainsKey(key))
+            // 同一個位置已經有一筆對不到的（同一列讀錯成不同的字）：不要重複
+            if (_unmatched.ContainsKey(key)
+                || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
             {
                 return false;
             }
-            found = new Found { Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key };
+            found = new Found
+            {
+                Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
+                Above = confidentAbove, Below = confidentBelow,
+            };
             _unmatched[key] = found;
         }
 
@@ -769,10 +1026,31 @@ public sealed class MainForm : Form
             return;
         }
         string screen = f.Unreadable ? "" : f.ScreenText;
-        using ItemPickerForm dlg = new(_book, f.Category, screen, Character);
-        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem item)
+        HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f)];
+        DiscoveryItem? item;
+        // 選的時候暫停讀取：不然背景讀到的結果可能改動這一筆（例如同名的被自動改成組裡的另一個）
+        bool wasRunning = _timer.Enabled;
+        _timer.Stop();
+        try
         {
-            return;
+            using ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below);
+            if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is null)
+            {
+                return;
+            }
+            item = dlg.SelectedItem;
+        }
+        finally
+        {
+            if (wasRunning)
+            {
+                _lastMask = null; // 重新確認畫面停下來了再讀
+                _timer.Start();
+            }
+        }
+        if (item is null || f.View is null || !_list.Items.Contains(f.View))
+        {
+            return; // 這一筆在選的時候已經不在清單上了
         }
 
         if (_matched.TryGetValue(item, out Found? other) && other != f)
@@ -787,6 +1065,11 @@ public sealed class MainForm : Form
         }
 
         RememberResolved(f);
+        // 同名的一組裡的一列改指定到組外：這一組少了一筆，記下來免得下次讀到又補回來
+        if (f.Match.IsVariant && !f.Match.Variants.Contains(item))
+        {
+            Suppress(f.Match.Variants[0]);
+        }
         DetachFound(f);
         f.Assigned = item;
         f.Category = item.Category;
@@ -805,8 +1088,18 @@ public sealed class MainForm : Form
         }
     }
 
+    private void Suppress(DiscoveryItem first)
+    {
+        _variantSuppressed.TryGetValue(first, out int n);
+        _variantSuppressed[first] = n + 1;
+    }
+
     private void RemoveFound(Found f)
     {
+        if (f.Match.IsVariant)
+        {
+            Suppress(f.Match.Variants[0]); // 移除同名的一列：下次讀到不要補回來
+        }
         RememberResolved(f);
         DetachFound(f);
         if (f.View is not null)
@@ -919,6 +1212,8 @@ public sealed class MainForm : Form
         _unmatched.Clear();
         _variantSeen.Clear();
         _resolvedKeys.Clear();
+        _variantSuppressed.Clear();
+        _variantOccurrences.Clear();
         _list.Items.Clear();
         _processedMask = null;
         UpdateSummary();
@@ -993,7 +1288,7 @@ public sealed class MainForm : Form
                         (string text, MatchResult match) = PickBestReading(category, row);
                         picks.Add((row, text, match));
                     }
-                    ResolveWithinPage(category, picks);
+                    ResolveWithinPage(category, picks, DetectSort(picks) == SortMode.ByName);
                 }
                 foreach (ListRow row in snapshot.Rows)
                 {
@@ -1119,8 +1414,47 @@ public sealed class MainForm : Form
         }
     }
 
+    // 標題列：版本，置頂時加註
+    private void UpdateTitle()
+    {
+        Text = $"發現物同步 v{Application.ProductVersion.Split('+')[0]}{(TopMost ? "（置頂，F1 取消）" : "")}";
+    }
+
+    // F1：切換視窗置頂（遊戲在前面時也看得到清單和狀態）
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.F1)
+        {
+            TopMost = !TopMost;
+            _settings.TopMost = TopMost;
+            UpdateTitle();
+            SetStatus(TopMost ? "視窗置頂：開（再按 F1 取消）。注意不要擋住遊戲的清單。" : "視窗置頂：關。");
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            return;
+        }
+        base.OnKeyDown(e);
+    }
+
+    // F1 預設會觸發「說明」事件，這裡已經拿來切換置頂，不要再跳出說明
+    protected override void OnHelpRequested(HelpEventArgs hevent)
+    {
+        hevent.Handled = true;
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // 還有勾選、但還沒寫入 Excel 的：問一下，免得辛苦讀的結果不見
+        int character = Character;
+        int pending = _matched.Values.Concat(_unmatched.Values)
+            .Count(f => f.View is { Checked: true } && f.Item is not null && !f.Item.Marked[character]);
+        if (pending > 0 && e.CloseReason == CloseReason.UserClosing
+            && MessageBox.Show(this, $"還有 {pending} 筆勾選的發現物沒有寫入 Excel，關閉後這次讀到的結果會不見。\n\n確定要關閉嗎？",
+                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK)
+        {
+            e.Cancel = true;
+            return;
+        }
         _timer.Stop();
         Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         _settings.WindowX = bounds.X;

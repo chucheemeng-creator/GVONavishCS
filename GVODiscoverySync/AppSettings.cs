@@ -54,6 +54,9 @@ public class AppSettings
     public int WindowWidth { get; set; }
     public int WindowHeight { get; set; }
 
+    /// <summary>視窗置頂（F1 切換）。</summary>
+    public bool TopMost { get; set; }
+
     [JsonIgnore]
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.json");
 
