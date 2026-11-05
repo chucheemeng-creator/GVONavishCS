@@ -492,13 +492,15 @@ public sealed class MainForm : Form
             (string text, MatchResult match) = PickBestReading(category, row);
             picks.Add((row, text, match));
         }
-        ResolveWithinPage(category, picks);
+        // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
+        SortMode mode = DetectSort(picks);
+        ResolveWithinPage(category, picks, mode == SortMode.ByName);
 
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
         // 依價值排列的頁面：同名的列用上下鄰居的功績直接判斷是組裡的哪一個（同名的各個功績都不同）
-        bool byValue = IsSortedByValue(picks);
+        bool byValue = DetectSort(picks) == SortMode.ByValue; // 推斷完再判斷一次，已確定的列比較多
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
@@ -610,7 +612,7 @@ public sealed class MainForm : Form
     ///   2. 清單照名稱的字元編碼排序時（預設的排序；按 ⇅ 換過排序就不是），這一列一定排在上下已確定的兩列之間
     /// 排除之後只剩一個、或第一名明顯領先，就當成確定。新確定的列可以再幫忙推斷別列，所以最多做 3 輪。
     /// </summary>
-    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks)
+    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool sortedByName)
     {
         if (_matcher is null)
         {
@@ -625,7 +627,8 @@ public sealed class MainForm : Form
                 .Where(p => p.Match.IsMatch)
                 .Select(p => (p.Row.Index, p.Match.Item!.Name))];
             // 已確定的列至少 3 個、而且照編碼由小到大，才當成這一頁是照名稱排序
-            bool sorted = anchors.Count >= 3
+            // 這一頁照名稱排序（DetectSort 判斷的），而且新確定的列也沒有違反，才用上下列的順序排除候選
+            bool sorted = sortedByName
                           && anchors.Zip(anchors.Skip(1)).All(z => string.CompareOrdinal(z.First.Name, z.Second.Name) <= 0);
 
             bool changed = false;
@@ -733,14 +736,44 @@ public sealed class MainForm : Form
     private static bool IsAnchor((ListRow Row, string Text, MatchResult Match) p)
         => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item is { Merit: > 0 };
 
+    private enum SortMode { Unknown, ByValue, ByName }
+
+    // 記住的排序方式：遊戲的排序是一個設定（按 ⇅ 才會換），有一頁證據充分就記住，之後證據不足的頁面沿用
+    private SortMode _sortMode = SortMode.Unknown;
+
     /// <summary>
-    /// 這一頁是不是「依價值排列」：已確定的列至少 4 個，功績由高到低（可以相等）。
-    /// 照名稱排列時功績是亂的，不會符合。
+    /// 判斷這一頁的排序（依價值：功績由高到低；依名稱：字元編碼由小到大）。
+    ///   - 已確定的列至少 4 個、而且只符合其中一種：證據充分，記住這個排序方式
+    ///   - 至少 2 個、只符合其中一種：這一頁就是這種排序
+    ///   - 證據不足（例如發現物少、這一頁只有一兩個已確定的列，兩種都符合）：沒有矛盾就沿用記住的排序方式
+    /// 兩種都符合時不下判斷，免得誤判（列數少時常常兩種都符合）。
+    /// 用剛開始玩的玩家模擬過（只有 1%～3% 的發現物）：判斷不出來的時候有，但沒有判斷錯的。
     /// </summary>
-    private static bool IsSortedByValue(List<(ListRow Row, string Text, MatchResult Match)> picks)
+    private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks)
     {
         List<int> merits = [.. picks.Where(IsAnchor).Select(p => p.Match.Item!.Merit)];
-        return merits.Count >= 4 && merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
+        List<string> names = [.. picks.Where(p => p.Match.IsMatch).Select(p => p.Match.Item!.Name)];
+        bool valueOrdered = merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
+        bool nameOrdered = names.Zip(names.Skip(1)).All(z => string.CompareOrdinal(z.First, z.Second) <= 0);
+
+        bool value4 = valueOrdered && merits.Count >= 4, name4 = nameOrdered && names.Count >= 4;
+        if (value4 != name4)
+        {
+            _sortMode = value4 ? SortMode.ByValue : SortMode.ByName;
+        }
+
+        bool value2 = valueOrdered && merits.Count >= 2, name2 = nameOrdered && names.Count >= 2;
+        if (value2 != name2)
+        {
+            return value2 ? SortMode.ByValue : SortMode.ByName;
+        }
+        // 證據不足：這一頁沒有違反記住的排序就沿用
+        return _sortMode switch
+        {
+            SortMode.ByValue when valueOrdered => SortMode.ByValue,
+            SortMode.ByName when nameOrdered => SortMode.ByName,
+            _ => SortMode.Unknown,
+        };
     }
 
     /// <summary>
@@ -1178,7 +1211,7 @@ public sealed class MainForm : Form
                         (string text, MatchResult match) = PickBestReading(category, row);
                         picks.Add((row, text, match));
                     }
-                    ResolveWithinPage(category, picks);
+                    ResolveWithinPage(category, picks, DetectSort(picks) == SortMode.ByName);
                 }
                 foreach (ListRow row in snapshot.Rows)
                 {
