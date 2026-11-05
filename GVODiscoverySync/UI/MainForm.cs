@@ -32,14 +32,20 @@ public sealed class MainForm : Form
     // 讀到的一筆結果
     private sealed class Found
     {
-        public required string Category { get; init; }
+        public required string Category { get; set; }
         public required string ScreenText { get; init; }
         public required MatchResult Match { get; init; }
         public bool HasCard { get; set; }
         public ListViewItem? View { get; set; }
 
-        /// <summary>同名的一組時，實際對應到組裡的哪一個（不是同名時是 null）。</summary>
-        public DiscoveryItem? Assigned { get; init; }
+        /// <summary>同名的一組、或手動指定時，實際對應到哪一個（其他時候是 null）。</summary>
+        public DiscoveryItem? Assigned { get; set; }
+
+        /// <summary>使用者手動指定的。</summary>
+        public bool Manual { get; set; }
+
+        /// <summary>放在「對不到」那一邊時的索引鍵（從那邊移走時要用）。</summary>
+        public string? UnmatchedKey { get; set; }
 
         /// <summary>同名的一組還沒全部看到，不確定是組裡的哪一個。</summary>
         public bool VariantUnsure { get; set; }
@@ -65,6 +71,8 @@ public sealed class MainForm : Form
     private readonly Dictionary<string, Found> _unmatched = [];
     // 同名的一組（以組裡第一個為代表）→ 在同一頁最多看到幾個
     private readonly Dictionary<DiscoveryItem, int> _variantSeen = [];
+    // 手動指定或移除過的列（分類＋畫面上的文字）：繼續捲動時又讀到同樣的文字，不要再加回來
+    private readonly HashSet<string> _resolvedKeys = [];
 
     private bool _busy;
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
@@ -167,6 +175,32 @@ public sealed class MainForm : Form
         _list.Columns.Add("相似度", 60, HorizontalAlignment.Right);
         _list.Columns.Add("卡片", 45, HorizontalAlignment.Center);
         _list.Columns.Add("狀態", 120);
+        ContextMenuStrip menu = new();
+        ToolStripMenuItem assignItem = new("指定 Excel 發現物…", null, (_, _) => AssignSelected()) { ShortcutKeyDisplayString = "Enter" };
+        ToolStripMenuItem removeItem = new("移除這一筆", null, (_, _) => RemoveSelected()) { ShortcutKeyDisplayString = "Delete" };
+        menu.Items.AddRange([assignItem, removeItem]);
+        menu.Opening += (_, e) =>
+        {
+            bool has = SelectedFound is not null;
+            assignItem.Enabled = has && _book is not null;
+            removeItem.Enabled = has;
+            e.Cancel = !has;
+        };
+        _list.ContextMenuStrip = menu;
+        _list.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                AssignSelected();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Delete)
+            {
+                RemoveSelected();
+                e.Handled = true;
+            }
+        };
+        _list.ShowItemToolTips = true;
 
         _lblSummary.Dock = DockStyle.Bottom;
         _lblSummary.AutoSize = false;
@@ -503,7 +537,7 @@ public sealed class MainForm : Form
     private bool AddUnreadable(string category, string above, string below)
     {
         string key = category + "\n?" + above + "|" + below;
-        if (_unmatched.ContainsKey(key))
+        if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key))
         {
             return false;
         }
@@ -517,7 +551,7 @@ public sealed class MainForm : Form
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note,
+            Unreadable = true, Note = note, UnmatchedKey = key,
         };
         _unmatched[key] = found;
         AddView(found);
@@ -688,6 +722,10 @@ public sealed class MainForm : Form
     /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match)
     {
+        if (_resolvedKeys.Contains(TextKey(category, screenText)))
+        {
+            return false; // 這個文字手動處理過了
+        }
         Found found;
         if (match.IsMatch)
         {
@@ -705,17 +743,104 @@ public sealed class MainForm : Form
         }
         else
         {
-            string key = category + "\n" + NameMatcher.Normalize(screenText);
+            string key = TextKey(category, screenText);
             if (_unmatched.ContainsKey(key))
             {
                 return false;
             }
-            found = new Found { Category = category, ScreenText = screenText, Match = match, HasCard = hasCard };
+            found = new Found { Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key };
             _unmatched[key] = found;
         }
 
         AddView(found);
         return true;
+    }
+
+    private static string TextKey(string category, string screenText) => category + "\n" + NameMatcher.Normalize(screenText);
+
+    // ── 手動指定、移除 ──
+
+    private Found? SelectedFound => _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Found : null;
+
+    private void AssignSelected()
+    {
+        if (_book is null || _matcher is null || SelectedFound is not Found f)
+        {
+            return;
+        }
+        string screen = f.Unreadable ? "" : f.ScreenText;
+        using ItemPickerForm dlg = new(_book, f.Category, screen, Character);
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem item)
+        {
+            return;
+        }
+
+        if (_matched.TryGetValue(item, out Found? other) && other != f)
+        {
+            // 同一個發現物已經在清單上：這一列是重複的
+            if (MessageBox.Show(this, $"「{item.Name}」已經在清單上了。\n\n要移除這一列嗎？", Text,
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK)
+            {
+                RemoveFound(f);
+            }
+            return;
+        }
+
+        RememberResolved(f);
+        DetachFound(f);
+        f.Assigned = item;
+        f.Category = item.Category;
+        f.Manual = true;
+        f.VariantUnsure = false;
+        _matched[item] = f;
+        UpdateRow(f, resetCheck: true);
+        UpdateSummary();
+    }
+
+    private void RemoveSelected()
+    {
+        if (SelectedFound is Found f)
+        {
+            RemoveFound(f);
+        }
+    }
+
+    private void RemoveFound(Found f)
+    {
+        RememberResolved(f);
+        DetachFound(f);
+        if (f.View is not null)
+        {
+            _list.Items.Remove(f.View);
+        }
+        UpdateSummary();
+    }
+
+    // 記住這一列手動處理過（同名的一組例外：組裡每一列的文字都一樣，記住的話其他列也讀不到了）
+    private void RememberResolved(Found f)
+    {
+        if (f.Unreadable && f.UnmatchedKey is not null)
+        {
+            _resolvedKeys.Add(f.UnmatchedKey);
+        }
+        else if (!f.Match.IsVariant)
+        {
+            _resolvedKeys.Add(TextKey(f.Category, f.ScreenText));
+        }
+    }
+
+    // 從「對到」「對不到」兩邊的紀錄拿掉（清單上的那一列不動）
+    private void DetachFound(Found f)
+    {
+        if (f.UnmatchedKey is not null)
+        {
+            _unmatched.Remove(f.UnmatchedKey);
+            f.UnmatchedKey = null;
+        }
+        foreach (DiscoveryItem key in _matched.Where(kv => kv.Value == f).Select(kv => kv.Key).ToList())
+        {
+            _matched.Remove(key);
+        }
     }
 
     private void UpdateRow(Found f, bool resetCheck)
@@ -729,6 +854,7 @@ public sealed class MainForm : Form
         view.SubItems[1].Text = f.ScreenText == "" ? "（讀不出來）" : f.ScreenText;
         view.SubItems[2].Text = f.Item?.Name ?? f.Note;
         view.SubItems[3].Text = f.Item is null ? ""
+            : f.Manual ? "手動"
             : f.Match.Score == 0 ? "推斷"
             : f.Match.Score.ToString("0%", CultureInfo.InvariantCulture);
         view.SubItems[4].Text = f.HasCard ? "✔" : "";
@@ -736,7 +862,14 @@ public sealed class MainForm : Form
         string status;
         Color color;
         bool check;
-        if (f.Unreadable)
+        if (f.Manual && f.Item is not null)
+        {
+            bool marked = f.Item.Marked[character];
+            status = marked ? "已經打勾" : "新增（手動指定）";
+            color = marked ? UiColors.PickForList(Color.Gray, Color.DarkGray) : UiColors.PickForList(Color.SeaGreen, Color.LightGreen);
+            check = !marked;
+        }
+        else if (f.Unreadable)
         {
             status = "讀不出來，請手動確認";
             color = UiColors.PickForList(Color.Firebrick, Color.FromArgb(255, 140, 110));
@@ -785,6 +918,7 @@ public sealed class MainForm : Form
         _matched.Clear();
         _unmatched.Clear();
         _variantSeen.Clear();
+        _resolvedKeys.Clear();
         _list.Items.Clear();
         _processedMask = null;
         UpdateSummary();
