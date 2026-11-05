@@ -359,7 +359,7 @@ public sealed class MainForm : Form
         }
         string name = _book.CharacterNames[character];
         if (MessageBox.Show(this,
-                $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先在同一個資料夾備份原檔。\n寫入時 Excel 必須是關閉的。",
+                $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先把原檔備份到 Excel 所在資料夾的 backup 資料夾。\n寫入時 Excel 必須是關閉的。",
                 Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
         {
             return;
@@ -376,7 +376,7 @@ public sealed class MainForm : Form
                 UpdateRow(f, resetCheck: true);
             }
             UpdateSummary();
-            MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\n{Path.GetFileName(backup)}",
+            MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(backup)}",
                 Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)

@@ -222,7 +222,7 @@ public sealed class DiscoveryBook
 
     /// <summary>
     /// 幫人物 character（0～4）在這些發現物打勾，存回 Excel。已經打勾的會跳過。
-    /// 寫入前先在同一個資料夾備份原檔（檔名.bak-日期時間.xlsx），回傳備份檔的路徑。
+    /// 寫入前先備份原檔到 Excel 所在資料夾的 backup 子資料夾（檔名.bak-日期時間.xlsx），回傳備份檔的路徑。
     /// Excel 開著這個檔案時會丟出 IOException。
     /// </summary>
     public string WriteMarks(int character, IReadOnlyCollection<DiscoveryItem> items)
@@ -234,7 +234,8 @@ public sealed class DiscoveryBook
 
         EnsureNotOpenElsewhere();
 
-        string dir = Path.GetDirectoryName(FilePath) ?? "";
+        string dir = Path.Combine(Path.GetDirectoryName(FilePath) ?? "", "backup");
+        Directory.CreateDirectory(dir);
         string backup = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(FilePath)}.bak-{DateTime.Now:yyyyMMdd-HHmmss}{Path.GetExtension(FilePath)}");
         File.Copy(FilePath, backup, false);
 
