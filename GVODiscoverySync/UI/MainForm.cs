@@ -626,11 +626,16 @@ public sealed class MainForm : Form
                 return; // 讀過了
             }
         }
-        _processedMask = mask;
-        if (!ReferenceEquals(mask, _retryMask) && !DiscoveryListReader.SameText(mask, _retryMask))
+        // 「已經讀過哪個畫面」只給連續讀取用：用截圖檔測試（live＝false）不要改它，
+        // 否則之後開始讀取時，畫面剛好和測試的截圖一樣就會被當成讀過了
+        if (live)
         {
-            _retryMask = mask;
-            _retries = 0;
+            _processedMask = mask;
+            if (!ReferenceEquals(mask, _retryMask) && !DiscoveryListReader.SameText(mask, _retryMask))
+            {
+                _retryMask = mask;
+                _retries = 0;
+            }
         }
 
         NameMatcher matcher = _matcher;
@@ -769,6 +774,10 @@ public sealed class MainForm : Form
     // （不設上限的話，停在別的畫面時會每 0.4 秒辨識一次）
     private void AllowRetry()
     {
+        if (_processedMask is null)
+        {
+            return; // 用截圖檔測試時沒有記「已處理」，不用重試
+        }
         if (_retries < 2)
         {
             _retries++;
@@ -1013,7 +1022,9 @@ public sealed class MainForm : Form
         return hit;
     }
 
-    // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
+    // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用。
+    // 要求功績 > 0：功績是 0 表示 Excel 那一欄是空的或讀不出數字，不能拿來比大小
+    // （目前的 Excel 3,931 個發現物功績都大於 0；新版 Excel 若出現合法的 0 功績要回來看這裡）
     private static bool IsAnchor((ListRow Row, string Text, MatchResult Match) p)
         => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item is { Merit: > 0 };
 
@@ -1034,8 +1045,10 @@ public sealed class MainForm : Form
     /// </summary>
     private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks, bool remember = true)
     {
-        List<int> merits = [.. picks.Where(IsAnchor).Select(p => p.Match.Item!.Merit)];
-        List<string> names = [.. picks.Where(p => p.Match.IsMatch).Select(p => NameMatcher.SortKey(p.Match.Item!.Name))];
+        // 兩種排序用同一組已確定的列（不含同名組：同名組的列都先對到組裡第一個，功績、名稱都不代表那一列）
+        List<(ListRow Row, string Text, MatchResult Match)> anchors = [.. picks.Where(IsAnchor)];
+        List<int> merits = [.. anchors.Select(p => p.Match.Item!.Merit)];
+        List<string> names = [.. anchors.Select(p => NameMatcher.SortKey(p.Match.Item!.Name))];
         bool valueOrdered = merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
         bool nameOrdered = names.Zip(names.Skip(1)).All(z => string.CompareOrdinal(z.First, z.Second) <= 0);
 

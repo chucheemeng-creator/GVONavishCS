@@ -182,15 +182,18 @@ public sealed class ItemPickerForm : Form
         int meritLow = int.MinValue, meritHigh = int.MaxValue;
         if (excelOrder && (aboveIndex >= 0 || belowIndex >= 0))
         {
-            int a = aboveIndex >= 0 ? items[aboveIndex].Merit : items[belowIndex].Merit;
-            int b = belowIndex >= 0 ? items[belowIndex].Merit : items[aboveIndex].Merit;
-            // 只知道一邊時（清單的第一列或最後一列），另一邊不限
-            meritLow = belowIndex >= 0 ? Math.Min(a, b) : int.MinValue;
-            meritHigh = aboveIndex >= 0 ? Math.Max(a, b) : int.MaxValue;
             if (aboveIndex >= 0 && belowIndex >= 0)
             {
-                meritLow = Math.Min(a, b);
-                meritHigh = Math.Max(a, b);
+                meritLow = Math.Min(items[aboveIndex].Merit, items[belowIndex].Merit);
+                meritHigh = Math.Max(items[aboveIndex].Merit, items[belowIndex].Merit);
+            }
+            else if (aboveIndex >= 0)
+            {
+                meritHigh = items[aboveIndex].Merit; // 只知道上一列（清單的最後一列）：比它低的都可能
+            }
+            else
+            {
+                meritLow = items[belowIndex].Merit; // 只知道下一列（清單的第一列）：比它高的都可能
             }
         }
         // 上下兩列都知道才標粗體：只知道一邊時範圍是「比上一列低的全部」，會有半張表是粗體，沒有意義
