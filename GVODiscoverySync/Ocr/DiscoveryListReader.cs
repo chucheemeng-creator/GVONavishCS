@@ -145,8 +145,15 @@ public sealed class DiscoveryListReader
     /// </summary>
     public byte[] TextMask(Bitmap client, double scale)
     {
-        List<byte> mask = [];
+        // 每 400ms 跑一次（150% 縮放時約 12 萬個點）：先算好總數，配置一次陣列，不用 List 一直擴充
         Rectangle[] rects = [TitleRect(client.Size, scale), ListRect(client.Size, scale)];
+        int length = 0;
+        foreach (Rectangle r in rects)
+        {
+            length += Math.Max(0, r.Width) * Math.Max(0, r.Height);
+        }
+        byte[] mask = new byte[length];
+        int pos = 0;
         foreach (Rectangle r in rects)
         {
             if (r.Width <= 0 || r.Height <= 0)
@@ -156,15 +163,16 @@ public sealed class DiscoveryListReader
             byte[] bytes = GetPixelBytes(client, r, out int stride);
             for (int y = 0; y < r.Height; y++)
             {
+                int rowOffset = y * stride;
                 for (int x = 0; x < r.Width; x++)
                 {
-                    int o = y * stride + x * 4;
+                    int o = rowOffset + x * 4;
                     int m = Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2]));
-                    mask.Add(m >= TextThreshold ? (byte)1 : (byte)0);
+                    mask[pos++] = m >= TextThreshold ? (byte)1 : (byte)0;
                 }
             }
         }
-        return [.. mask];
+        return mask;
     }
 
     /// <summary>

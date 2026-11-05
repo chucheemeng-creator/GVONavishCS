@@ -86,6 +86,9 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
 
     private bool _busy;
+    // 一頁一頁加入清單時暫停重繪（AddView 不各自捲動，結束後只捲到最後加入的那一筆）
+    private bool _batching;
+    private ListViewItem? _lastAdded;
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
     private byte[]? _lastMask;
     private byte[]? _processedMask;
@@ -499,6 +502,29 @@ public sealed class MainForm : Form
         SortMode mode = DetectSort(picks);
         ResolveWithinPage(category, picks, mode == SortMode.ByName);
 
+        // 加入、移除清單的這一段暫停重繪：一頁最多加 10 筆，不要每加一筆就重繪、捲動一次
+        _list.BeginUpdate();
+        _batching = true;
+        try
+        {
+            AddPage(category, picks, how, snapshot.Rows.Count);
+        }
+        finally
+        {
+            _batching = false;
+            _list.EndUpdate();
+            // 只捲到最後加入的那一筆
+            if (_lastAdded is not null && _list.Items.Contains(_lastAdded))
+            {
+                _lastAdded.EnsureVisible();
+            }
+            _lastAdded = null;
+        }
+    }
+
+    // 把一頁的結果加進清單（ProcessFrameAsync 用，呼叫時清單已經暫停重繪）
+    private void AddPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, string how, int rowCount)
+    {
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
@@ -560,7 +586,7 @@ public sealed class MainForm : Form
         {
             total = items.Count;
         }
-        SetStatus($"{category}{how}：這一頁讀到 {snapshot.Rows.Count} 筆，新出現 {added} 筆。這個分類目前對到 {listed}／{total} 個。");
+        SetStatus($"{category}{how}：這一頁讀到 {rowCount} 筆，新出現 {added} 筆。這個分類目前對到 {listed}／{total} 個。");
         UpdateSummary();
     }
 
@@ -710,22 +736,23 @@ public sealed class MainForm : Form
                 }
 
                 // 每種倍率讀到的結果都列出候選，同一個候選取最高分
-                Dictionary<IReadOnlyList<DiscoveryItem>, (double Score, string Text)> merged = [];
+                // 以組裡第一個發現物當索引鍵（不靠清單物件本身的參考相等）
+                Dictionary<DiscoveryItem, (IReadOnlyList<DiscoveryItem> Items, double Score, string Text)> merged = [];
                 foreach (string reading in row.Readings)
                 {
                     foreach ((IReadOnlyList<DiscoveryItem> items, double score) in _matcher.Candidates(category, reading))
                     {
-                        if (!merged.TryGetValue(items, out (double Score, string Text) old) || score > old.Score)
+                        if (!merged.TryGetValue(items[0], out (IReadOnlyList<DiscoveryItem> Items, double Score, string Text) old)
+                            || score > old.Score)
                         {
-                            merged[items] = (score, reading);
+                            merged[items[0]] = (items, score, reading);
                         }
                     }
                 }
-                List<(IReadOnlyList<DiscoveryItem> Items, double Score, string Text)> candidates = [.. merged
-                    .Select(kv => (kv.Key, kv.Value.Score, kv.Value.Text))
-                    .Where(c => !(c.Key.Count == 1 && claimed.Contains(c.Key[0])))
-                    .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Key[0].Name), lower) >= 0)
-                    .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Key[0].Name), upper) <= 0)
+                List<(IReadOnlyList<DiscoveryItem> Items, double Score, string Text)> candidates = [.. merged.Values
+                    .Where(c => !(c.Items.Count == 1 && claimed.Contains(c.Items[0])))
+                    .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), lower) >= 0)
+                    .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), upper) <= 0)
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {
@@ -965,7 +992,14 @@ public sealed class MainForm : Form
         found.View = new ListViewItem(["", "", "", "", "", ""]) { Tag = found };
         _list.Items.Add(found.View);
         UpdateRow(found, resetCheck: true);
-        found.View.EnsureVisible();
+        if (_batching)
+        {
+            _lastAdded = found.View; // 批次加入時，結束後只捲到最後一筆
+        }
+        else
+        {
+            found.View.EnsureVisible();
+        }
     }
 
     /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
