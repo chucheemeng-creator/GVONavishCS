@@ -143,6 +143,13 @@ public sealed class DiscoveryBook
             markColumns[i] = column;
         }
         columnByHeader.TryGetValue("ID", out string? idColumn);
+        columnByHeader.TryGetValue("功績", out string? meritColumn);
+        columnByHeader.TryGetValue("★", out string? starsColumn);
+        // 大部分工作表是「任務／地圖」，傳說是「任務名稱」
+        if (!columnByHeader.TryGetValue("任務／地圖", out string? questColumn))
+        {
+            columnByHeader.TryGetValue("任務名稱", out questColumn);
+        }
 
         List<DiscoveryItem> items = [];
         foreach (Row row in data.Elements<Row>())
@@ -182,7 +189,23 @@ public sealed class DiscoveryBook
                 int.TryParse(GetText(idCell, strings), NumberStyles.Integer, CultureInfo.InvariantCulture, out id);
             }
 
-            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id };
+            int merit = 0;
+            if (meritColumn is not null && cells.TryGetValue(meritColumn, out Cell? meritCell)
+                && double.TryParse(GetText(meritCell, strings), NumberStyles.Float, CultureInfo.InvariantCulture, out double m))
+            {
+                merit = (int)Math.Round(m);
+            }
+
+            string stars = starsColumn is not null && cells.TryGetValue(starsColumn, out Cell? starsCell)
+                ? GetText(starsCell, strings).Trim() : "";
+
+            string quest = questColumn is not null && cells.TryGetValue(questColumn, out Cell? questCell)
+                ? GetText(questCell, strings).Trim() : "";
+
+            DiscoveryItem item = new()
+            {
+                Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit, Stars = stars, Quest = quest,
+            };
             for (int i = 0; i < CharacterCount; i++)
             {
                 item.Marked[i] = cells.TryGetValue(markColumns[i], out Cell? markCell) && GetText(markCell, strings).Trim() == Mark;
@@ -199,7 +222,7 @@ public sealed class DiscoveryBook
 
     /// <summary>
     /// 幫人物 character（0～4）在這些發現物打勾，存回 Excel。已經打勾的會跳過。
-    /// 寫入前先在同一個資料夾備份原檔（檔名.bak-日期時間.xlsx），回傳備份檔的路徑。
+    /// 寫入前先備份原檔到 Excel 所在資料夾的 backup 子資料夾（檔名.bak-日期時間.xlsx），回傳備份檔的路徑。
     /// Excel 開著這個檔案時會丟出 IOException。
     /// </summary>
     public string WriteMarks(int character, IReadOnlyCollection<DiscoveryItem> items)
@@ -211,7 +234,8 @@ public sealed class DiscoveryBook
 
         EnsureNotOpenElsewhere();
 
-        string dir = Path.GetDirectoryName(FilePath) ?? "";
+        string dir = Path.Combine(Path.GetDirectoryName(FilePath) ?? "", "backup");
+        Directory.CreateDirectory(dir);
         string backup = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(FilePath)}.bak-{DateTime.Now:yyyyMMdd-HHmmss}{Path.GetExtension(FilePath)}");
         File.Copy(FilePath, backup, false);
 
