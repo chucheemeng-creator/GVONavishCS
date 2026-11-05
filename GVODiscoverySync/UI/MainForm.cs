@@ -79,6 +79,8 @@ public sealed class MainForm : Form
     private readonly HashSet<string> _resolvedKeys = [];
     // 同名的一組（以組裡第一個為代表）→ 使用者移除、或改指定到組外的筆數（補的時候要算進去）
     private readonly Dictionary<DiscoveryItem, int> _variantSuppressed = [];
+    // 同名的一組 → 看過的每一個（用上下鄰居的名稱分辨：鄰居不同就是不同的一個）
+    private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
 
     private bool _busy;
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
@@ -500,6 +502,14 @@ public sealed class MainForm : Form
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            if (match.IsMatch && match.IsVariant)
+            {
+                // 記住這一個同名列的上下鄰居，分辨是不是之前看過的那一個
+                // 只用已確定的鄰居（Excel 的寫法）：同一個鄰居讀錯成兩種寫法時，才不會被當成兩個不同的
+                RegisterOccurrence(match.Variants,
+                    i > 0 && picks[i - 1].Match.IsMatch ? picks[i - 1].Match.Item!.Name : "",
+                    i + 1 < picks.Count && picks[i + 1].Match.IsMatch ? picks[i + 1].Match.Item!.Name : "");
+            }
             if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
             {
                 if (AddVariantExact(category, text, row.HasCard, match, exact))
@@ -680,6 +690,45 @@ public sealed class MainForm : Form
         }
     }
 
+    // 比對用的名稱拿掉結尾數字（「圓犁頭鰩2」→「圓犁頭鰩」），判斷鄰居是不是同一組
+    private static string BaseKey(string name) => Regex.Replace(NameMatcher.Normalize(name), @"[0-9]+$", "");
+
+    /// <summary>
+    /// 記下同名組裡的一列（上下鄰居的名稱）。和之前看過的任何一個有共同的鄰居，就是同一個；
+    /// 都沒有就是新的一個。捲動時鄰居不會變（變的只是在畫面上的位置），到了頁面邊緣也還有一邊的鄰居對得上。
+    /// 鄰居是同一組的（照名稱排列時同名的排在一起）不算，兩邊都沒有鄰居時無法分辨，不記。
+    /// </summary>
+    private void RegisterOccurrence(IReadOnlyList<DiscoveryItem> variants, string above, string below)
+    {
+        string groupBase = BaseKey(variants[0].Name);
+        string[] neighbors = [above, below];
+        HashSet<string> keys = [.. neighbors
+            .Where(n => n != "" && n != "（讀不出來）" && BaseKey(n) != groupBase)
+            .Select(NameMatcher.Normalize)];
+        if (keys.Count == 0)
+        {
+            return;
+        }
+        if (!_variantOccurrences.TryGetValue(variants[0], out List<HashSet<string>>? list))
+        {
+            list = [];
+            _variantOccurrences[variants[0]] = list;
+        }
+        List<HashSet<string>> hits = [.. list.Where(o => o.Overlaps(keys))];
+        if (hits.Count == 0)
+        {
+            list.Add(keys);
+            return;
+        }
+        // 對到一個以上（這次的鄰居把之前分開記的兩筆接起來了）：併成一筆
+        hits[0].UnionWith(keys);
+        foreach (HashSet<string> extra in hits.Skip(1))
+        {
+            hits[0].UnionWith(extra);
+            list.Remove(extra);
+        }
+    }
+
     // 已確定（不是同名的一組）的列：給判斷排序、功績範圍用
     private static bool IsAnchor((ListRow Row, string Text, MatchResult Match) p)
         => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item is { Merit: > 0 };
@@ -770,8 +819,11 @@ public sealed class MainForm : Form
     {
         IReadOnlyList<DiscoveryItem> variants = match.Variants;
         DiscoveryItem first = variants[0];
+        // 看過幾個：同一頁同時看到的個數（照名稱排列時同名的排在一起），
+        // 或是用鄰居分辨出來的個數（依價值排列時同名的分散在不同頁），取大的
         _variantSeen.TryGetValue(first, out int before);
-        int seen = Math.Max(before, Math.Min(rows.Count, variants.Count));
+        int occurrences = _variantOccurrences.TryGetValue(first, out List<HashSet<string>>? occ) ? occ.Count : 0;
+        int seen = Math.Min(variants.Count, Math.Max(before, Math.Max(rows.Count, occurrences)));
         _variantSeen[first] = seen;
         bool complete = seen == variants.Count;
 
@@ -1051,6 +1103,7 @@ public sealed class MainForm : Form
         _variantSeen.Clear();
         _resolvedKeys.Clear();
         _variantSuppressed.Clear();
+        _variantOccurrences.Clear();
         _list.Items.Clear();
         _processedMask = null;
         UpdateSummary();
