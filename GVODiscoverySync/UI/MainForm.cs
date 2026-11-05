@@ -133,6 +133,9 @@ public sealed class MainForm : Form
     private bool _busy;
     // 視窗正在關閉：還在跑的辨識回來後不要再碰畫面
     private bool _closing;
+    // 寫入 Excel、手動指定進行中（包括等辨識結束、對話框開著的時候）：
+    // 這段期間不能再開始另一個操作，也不能手動開始／停止讀取（否則結束時的「恢復讀取」會蓋掉使用者的選擇）
+    private bool _operationPending;
     // 一頁一頁加入清單時暫停重繪（AddView 不各自捲動，結束後只捲到最後加入的那一筆）
     private bool _batching;
     private ListViewItem? _lastAdded;
@@ -206,7 +209,13 @@ public sealed class MainForm : Form
         top.Controls.Add(_txtExcel, 1, 0);
         _btnBrowse.Text = "選擇…";
         _btnBrowse.AutoSize = true;
-        _btnBrowse.Click += (_, _) => BrowseExcel();
+        _btnBrowse.Click += (_, _) =>
+        {
+            if (!_operationPending)
+            {
+                BrowseExcel();
+            }
+        };
         top.Controls.Add(_btnBrowse, 2, 0);
 
         // 第 2 列：人物、按鈕
@@ -218,7 +227,13 @@ public sealed class MainForm : Form
         buttons.Controls.Add(_cboCharacter);
         SetupButton(_btnStart, "開始讀取", (_, _) => ToggleReading());
         SetupButton(_btnWrite, "寫入 Excel", async (_, _) => await WriteExcelAsync());
-        SetupButton(_btnClear, "清除結果", (_, _) => ClearResults());
+        SetupButton(_btnClear, "清除結果", (_, _) =>
+        {
+            if (!_operationPending)
+            {
+                ClearResults();
+            }
+        });
         SetupButton(_btnSaveScreen, "存下遊戲畫面", async (_, _) => await SaveScreenAsync());
         SetupButton(_btnTestFile, "用截圖檔測試…", async (_, _) => await TestFromFileAsync());
         buttons.Controls.AddRange([_btnStart, _btnWrite, _btnClear, _btnSaveScreen, _btnTestFile]);
@@ -250,8 +265,8 @@ public sealed class MainForm : Form
         menu.Opening += (_, e) =>
         {
             bool has = SelectedFound is not null;
-            assignItem.Enabled = has && _book is not null;
-            removeItem.Enabled = has;
+            assignItem.Enabled = has && _book is not null && !_operationPending;
+            removeItem.Enabled = has && !_operationPending;
             copyItem.Enabled = SelectedScreenTexts().Count > 0;
             e.Cancel = !has;
         };
@@ -400,6 +415,22 @@ public sealed class MainForm : Form
 
     private async Task WriteExcelAsync()
     {
+        if (_book is null || !TryBeginOperation())
+        {
+            return;
+        }
+        try
+        {
+            await WriteExcelCoreAsync();
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private async Task WriteExcelCoreAsync()
+    {
         if (_book is null)
         {
             return;
@@ -514,6 +545,10 @@ public sealed class MainForm : Form
 
     private void ToggleReading()
     {
+        if (_operationPending)
+        {
+            return; // 寫入或指定進行中：結束時會自己恢復原本的讀取狀態
+        }
         if (_timer.Enabled)
         {
             _timer.Stop();
@@ -1284,10 +1319,22 @@ public sealed class MainForm : Form
 
     private async Task AssignSelectedAsync()
     {
-        if (_book is null || _matcher is null || SelectedFound is not Found f)
+        if (_book is null || _matcher is null || SelectedFound is not Found f || !TryBeginOperation())
         {
             return;
         }
+        try
+        {
+            await AssignSelectedCoreAsync(f);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private async Task AssignSelectedCoreAsync(Found f)
+    {
         // 選的時候暫停讀取，並等正在跑的那一輪辨識結束：不然背景讀到的結果可能改動這一筆
         (bool wasRunning, bool completed) = await PauseReadingAsync();
         try
@@ -1381,6 +1428,10 @@ public sealed class MainForm : Form
 
     private void RemoveSelected()
     {
+        if (_operationPending)
+        {
+            return;
+        }
         if (SelectedFound is Found f)
         {
             RemoveFound(f);
@@ -1579,6 +1630,10 @@ public sealed class MainForm : Form
     // 另外存辨識前處理好的標題、清單（-title.png、-list.png）和辨識結果（.txt）
     private async Task SaveScreenAsync()
     {
+        if (_operationPending)
+        {
+            return;
+        }
         if (_busy)
         {
             SetStatus("正在辨識，請稍後再按一次。");
@@ -1678,6 +1733,10 @@ public sealed class MainForm : Form
     // 讀「存下遊戲畫面」存的截圖。檔名裡的 -s1.5 是縮放倍率；沒有的話用寬度 ÷ 800 推算
     private async Task TestFromFileAsync()
     {
+        if (_operationPending)
+        {
+            return;
+        }
         if (_reader is null || _matcher is null)
         {
             MessageBox.Show(this, "請先選 Excel 檔案（也需要繁體中文的文字辨識）。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1744,11 +1803,36 @@ public sealed class MainForm : Form
     private void UpdateButtons()
     {
         bool ready = _book is not null && _reader is not null;
-        _btnStart.Enabled = ready;
+        bool idle = !_operationPending;
+        _btnStart.Enabled = ready && idle;
         _btnStart.Text = _timer.Enabled ? "停止讀取" : "開始讀取";
-        _btnWrite.Enabled = _book is not null;
-        _btnSaveScreen.Enabled = true;
-        _btnTestFile.Enabled = ready;
+        _btnWrite.Enabled = _book is not null && idle;
+        _btnClear.Enabled = idle;
+        _btnBrowse.Enabled = idle;
+        _cboCharacter.Enabled = idle;
+        _btnSaveScreen.Enabled = idle;
+        _btnTestFile.Enabled = ready && idle;
+    }
+
+    // 開始一個會等辨識、開對話框的操作（寫入、手動指定）。已經有一個在進行時回傳 false
+    private bool TryBeginOperation()
+    {
+        if (_operationPending)
+        {
+            return false;
+        }
+        _operationPending = true;
+        UpdateButtons();
+        return true;
+    }
+
+    private void EndOperation()
+    {
+        _operationPending = false;
+        if (!_closing && !IsDisposed)
+        {
+            UpdateButtons();
+        }
     }
 
     // 要使用者確認的（同名分不出是哪一個、不確定、用排序推斷的）；手動指定的已經確認過
