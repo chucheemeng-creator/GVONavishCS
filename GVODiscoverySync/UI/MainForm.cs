@@ -77,6 +77,8 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, int> _variantSeen = [];
     // 手動指定或移除過的列（分類＋畫面上的文字）：繼續捲動時又讀到同樣的文字，不要再加回來
     private readonly HashSet<string> _resolvedKeys = [];
+    // 同名的一組（以組裡第一個為代表）→ 使用者移除、或改指定到組外的筆數（補的時候要算進去）
+    private readonly Dictionary<DiscoveryItem, int> _variantSuppressed = [];
 
     private bool _busy;
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
@@ -682,20 +684,34 @@ public sealed class MainForm : Form
         _variantSeen[first] = seen;
         bool complete = seen == variants.Count;
 
-        int added = 0;
-        for (int k = 0; k < seen; k++)
+        // 有卡片的資訊：第 k 個看到的對應組裡第 k 個（手動指定過的不動）
+        for (int k = 0; k < Math.Min(rows.Count, variants.Count); k++)
         {
-            DiscoveryItem item = variants[k];
-            (string text, bool hasCard) = rows[Math.Min(k, rows.Count - 1)];
-            if (_matched.TryGetValue(item, out Found? existing))
+            if (rows[k].HasCard && _matched.TryGetValue(variants[k], out Found? existing) && !existing.Manual && !existing.HasCard)
             {
-                if (hasCard && !existing.HasCard)
-                {
-                    existing.HasCard = true;
-                    UpdateRow(existing, resetCheck: false);
-                }
+                existing.HasCard = true;
+                UpdateRow(existing, resetCheck: false);
+            }
+        }
+
+        // 用「個數」判斷要不要補：同一頁看到幾個，清單上這一組就要有幾筆。
+        // 已經在清單上的（自動對到的、手動指定的）和使用者移除的都算，
+        // 否則把「水鹿」手動改成「水鹿2」之後，下一次讀到又會補一個「水鹿」回來。
+        _variantSuppressed.TryGetValue(first, out int suppressed);
+        int present = variants.Count(v => _matched.ContainsKey(v)) + suppressed;
+        int added = 0;
+        int rowIndex = 0;
+        foreach (DiscoveryItem item in variants)
+        {
+            if (present >= seen)
+            {
+                break;
+            }
+            if (_matched.ContainsKey(item))
+            {
                 continue;
             }
+            (string text, bool hasCard) = rows[Math.Min(rowIndex++, rows.Count - 1)];
             Found found = new()
             {
                 Category = category, ScreenText = text, Match = match, HasCard = hasCard,
@@ -703,13 +719,14 @@ public sealed class MainForm : Form
             };
             _matched[item] = found;
             AddView(found);
+            present++;
             added++;
         }
 
-        // 這次才看齊全部的話，之前標成「同名，請確認」的改成確定
+        // 這次才看齊全部的話，之前標成「同名，請確認」的改成確定（手動指定的本來就確定）
         foreach (DiscoveryItem item in variants)
         {
-            if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && complete)
+            if (_matched.TryGetValue(item, out Found? f) && f.VariantUnsure && complete && !f.Manual)
             {
                 f.VariantUnsure = false;
                 UpdateRow(f, resetCheck: true);
@@ -795,6 +812,11 @@ public sealed class MainForm : Form
         }
 
         RememberResolved(f);
+        // 同名的一組裡的一列改指定到組外：這一組少了一筆，記下來免得下次讀到又補回來
+        if (f.Match.IsVariant && !f.Match.Variants.Contains(item))
+        {
+            Suppress(f.Match.Variants[0]);
+        }
         DetachFound(f);
         f.Assigned = item;
         f.Category = item.Category;
@@ -813,8 +835,18 @@ public sealed class MainForm : Form
         }
     }
 
+    private void Suppress(DiscoveryItem first)
+    {
+        _variantSuppressed.TryGetValue(first, out int n);
+        _variantSuppressed[first] = n + 1;
+    }
+
     private void RemoveFound(Found f)
     {
+        if (f.Match.IsVariant)
+        {
+            Suppress(f.Match.Variants[0]); // 移除同名的一列：下次讀到不要補回來
+        }
         RememberResolved(f);
         DetachFound(f);
         if (f.View is not null)
@@ -927,6 +959,7 @@ public sealed class MainForm : Form
         _unmatched.Clear();
         _variantSeen.Clear();
         _resolvedKeys.Clear();
+        _variantSuppressed.Clear();
         _list.Items.Clear();
         _processedMask = null;
         UpdateSummary();
