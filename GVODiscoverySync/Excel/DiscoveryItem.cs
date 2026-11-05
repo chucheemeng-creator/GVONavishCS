@@ -20,6 +20,9 @@ public sealed class DiscoveryItem
     /// <summary>功績欄的值，沒有時是 0。遊戲裡「依價值排列」就是依這個排。</summary>
     public int Merit { get; init; }
 
+    /// <summary>任務／地圖欄（傳說是「任務名稱」欄），沒有時是 ""。</summary>
+    public string Quest { get; init; } = "";
+
     /// <summary>★ 欄（星星數，Excel 上寫成「五」「一」或數字），沒有時是 ""。</summary>
     public string Stars { get; init; } = "";
 

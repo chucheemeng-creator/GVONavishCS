@@ -145,6 +145,11 @@ public sealed class DiscoveryBook
         columnByHeader.TryGetValue("ID", out string? idColumn);
         columnByHeader.TryGetValue("功績", out string? meritColumn);
         columnByHeader.TryGetValue("★", out string? starsColumn);
+        // 大部分工作表是「任務／地圖」，傳說是「任務名稱」
+        if (!columnByHeader.TryGetValue("任務／地圖", out string? questColumn))
+        {
+            columnByHeader.TryGetValue("任務名稱", out questColumn);
+        }
 
         List<DiscoveryItem> items = [];
         foreach (Row row in data.Elements<Row>())
@@ -194,7 +199,13 @@ public sealed class DiscoveryBook
             string stars = starsColumn is not null && cells.TryGetValue(starsColumn, out Cell? starsCell)
                 ? GetText(starsCell, strings).Trim() : "";
 
-            DiscoveryItem item = new() { Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit, Stars = stars };
+            string quest = questColumn is not null && cells.TryGetValue(questColumn, out Cell? questCell)
+                ? GetText(questCell, strings).Trim() : "";
+
+            DiscoveryItem item = new()
+            {
+                Category = category, Name = name, Row = rowIndex, Id = id, Merit = merit, Stars = stars, Quest = quest,
+            };
             for (int i = 0; i < CharacterCount; i++)
             {
                 item.Marked[i] = cells.TryGetValue(markColumns[i], out Cell? markCell) && GetText(markCell, strings).Trim() == Mark;
