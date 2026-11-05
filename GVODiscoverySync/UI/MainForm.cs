@@ -53,6 +53,9 @@ public sealed class MainForm : Form
         /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
         public bool Unreadable { get; init; }
 
+        /// <summary>讀到這一列時，這一頁是不是依價值排列（手動指定時才用功績範圍縮小候選）。</summary>
+        public bool PageByValue { get; init; }
+
         public string Note { get; init; } = "";
 
         /// <summary>
@@ -94,6 +97,9 @@ public sealed class MainForm : Form
     // 上一次截圖、上一次辨識時，畫面上字的位置（判斷捲動停了沒、讀過了沒）
     private byte[]? _lastMask;
     private byte[]? _processedMask;
+    // 失敗重試：哪一個畫面、已經重試幾次
+    private byte[]? _retryMask;
+    private int _retries;
 
     private readonly TextBox _txtExcel = new();
     private readonly Button _btnBrowse = new();
@@ -482,6 +488,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
+            AllowRetry();
             if (!_closing && !IsDisposed)
             {
                 SetStatus("讀取時發生錯誤：" + ex.Message);
@@ -518,6 +525,11 @@ public sealed class MainForm : Form
             }
         }
         _processedMask = mask;
+        if (!ReferenceEquals(mask, _retryMask) && !DiscoveryListReader.SameText(mask, _retryMask))
+        {
+            _retryMask = mask;
+            _retries = 0;
+        }
 
         NameMatcher matcher = _matcher;
         ListSnapshot snapshot = await _reader.ReadAsync(client, scale, t => matcher.MatchCategory(t) is not null);
@@ -535,6 +547,7 @@ public sealed class MainForm : Form
         }
         if (category is null)
         {
+            AllowRetry();
             SetStatus(snapshot.Rows.Count == 0
                 ? "目前畫面不是「發現物一覽」（清單上讀不到字）。"
                 : "看不出這一頁是哪個分類（清單上的名稱在 Excel 裡對不太到），這一頁先跳過。");
@@ -579,7 +592,8 @@ public sealed class MainForm : Form
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
         // 依價值排列的頁面：同名的列用上下鄰居的功績直接判斷是組裡的哪一個（同名的各個功績都不同）
-        bool byValue = DetectSort(picks) == SortMode.ByValue; // 推斷完再判斷一次，已確定的列比較多
+        _pageSort = DetectSort(picks); // 推斷完再判斷一次，已確定的列比較多
+        bool byValue = _pageSort == SortMode.ByValue;
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
@@ -587,9 +601,7 @@ public sealed class MainForm : Form
             {
                 // 記住這一個同名列的上下鄰居，分辨是不是之前看過的那一個
                 // 只用已確定的鄰居（Excel 的寫法）：同一個鄰居讀錯成兩種寫法時，才不會被當成兩個不同的
-                RegisterOccurrence(match.Variants,
-                    i > 0 && picks[i - 1].Match.IsMatch ? picks[i - 1].Match.Item!.Name : "",
-                    i + 1 < picks.Count && picks[i + 1].Match.IsMatch ? picks[i + 1].Match.Item!.Name : "");
+                RegisterOccurrence(match.Variants, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1));
             }
             if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
             {
@@ -636,17 +648,51 @@ public sealed class MainForm : Form
         {
             total = items.Count;
         }
-        SetStatus($"{category}{how}：這一頁讀到 {rowCount} 筆，新出現 {added} 筆。這個分類目前對到 {listed}／{total} 個。");
+        string sortText = _pageSort switch
+        {
+            SortMode.ByValue => "依價值排列",
+            SortMode.ByName => "依名稱排列",
+            _ => "排序看不出來",
+        };
+        SetStatus($"{category}{how}（{sortText}）：這一頁讀到 {rowCount} 筆，新出現 {added} 筆。這個分類目前對到 {listed}／{total} 個。");
         UpdateSummary();
     }
 
-    // 第 index 列已確定的話，它的 Excel 名稱；沒有這一列、或還不確定時是 ""
-    private static string ConfidentName(List<(ListRow Row, string Text, MatchResult Match)> picks, int index)
-        => index >= 0 && index < picks.Count && picks[index].Match.IsMatch ? picks[index].Match.Item!.Name : "";
+    // 這一輪失敗（分類判斷不出來、發生例外）：同一個畫面再給 2 次機會，不要記成已處理
+    // （不設上限的話，停在別的畫面時會每 0.4 秒辨識一次）
+    private void AllowRetry()
+    {
+        if (_retries < 2)
+        {
+            _retries++;
+            _processedMask = null;
+        }
+    }
 
-    // f 和「上一列是 above、下一列是 below」是不是清單上同一個位置（上一列或下一列相同就是）
+    // 第 index 列已確定的話，它的 Excel 名稱；沒有這一列、還不確定、或是同名的一組時是 ""
+    // （同名組的每一列都先對到組裡第一個，好幾列的鄰居會叫同一個名字，不能拿來當位置的依據）
+    private static string ConfidentName(List<(ListRow Row, string Text, MatchResult Match)> picks, int index)
+        => index >= 0 && index < picks.Count && picks[index].Match.IsMatch && !picks[index].Match.IsVariant
+            ? picks[index].Match.Item!.Name : "";
+
+    /// <summary>
+    /// f 和「上一列是 above、下一列是 below」是不是清單上同一個位置。
+    /// 兩邊都有資料時兩邊都要相同；只有一邊有資料（頁面邊緣、鄰居還不確定）時看那一邊；都沒有時不算。
+    /// </summary>
     private static bool SamePosition(Found f, string above, string below)
-        => (above != "" && f.Above == above) || (below != "" && f.Below == below);
+    {
+        bool aboveKnown = above != "" && f.Above != "";
+        bool belowKnown = below != "" && f.Below != "";
+        if (aboveKnown && belowKnown)
+        {
+            return f.Above == above && f.Below == below;
+        }
+        if (aboveKnown)
+        {
+            return f.Above == above;
+        }
+        return belowKnown && f.Below == below;
+    }
 
     /// <summary>
     /// 清掉過時的「找不到」「不確定」「讀不出來」：這一頁確定讀到的列，和它們在同一個位置（上一列或下一列相同），
@@ -709,6 +755,7 @@ public sealed class MainForm : Form
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
             Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow,
+            PageByValue = _pageSort == SortMode.ByValue,
         };
         _unmatched[key] = found;
         AddView(found);
@@ -866,6 +913,8 @@ public sealed class MainForm : Form
 
     // 記住的排序方式：遊戲的排序是一個設定（按 ⇅ 才會換），有一頁證據充分就記住，之後證據不足的頁面沿用
     private SortMode _sortMode = SortMode.Unknown;
+    // 最近一頁判斷出的排序（狀態列顯示；讀不出來的列記下來，手動指定時才知道能不能用功績範圍）
+    private SortMode _pageSort = SortMode.Unknown;
 
     /// <summary>
     /// 判斷這一頁的排序（依價值：功績由高到低；依名稱：字元編碼由小到大）。
@@ -891,7 +940,13 @@ public sealed class MainForm : Form
         bool value2 = valueOrdered && merits.Count >= 2, name2 = nameOrdered && names.Count >= 2;
         if (value2 != name2)
         {
-            return value2 ? SortMode.ByValue : SortMode.ByName;
+            SortMode page = value2 ? SortMode.ByValue : SortMode.ByName;
+            // 這一頁只符合另一種排序：可能在遊戲裡按 ⇅ 換了排序，記住的不可靠了，清掉
+            if (remember && _sortMode != SortMode.Unknown && _sortMode != page)
+            {
+                _sortMode = SortMode.Unknown;
+            }
+            return page;
         }
         // 證據不足：這一頁沒有違反記住的排序就沿用
         return _sortMode switch
@@ -978,13 +1033,15 @@ public sealed class MainForm : Form
     {
         IReadOnlyList<DiscoveryItem> variants = match.Variants;
         DiscoveryItem first = variants[0];
-        // 看過幾個：同一頁同時看到的個數（照名稱排列時同名的排在一起），
-        // 或是用鄰居分辨出來的個數（依價值排列時同名的分散在不同頁），取大的
+        // 看過幾個：同一頁同時看到的個數（照名稱排列時同名的排在一起；確定），
+        // 或是用鄰居分辨出來的個數（依價值排列時同名的分散在不同頁；鄰居可能認錯，只當線索），取大的。
+        // 只有同一頁同時看到全部時才當成確定；靠鄰居數出來的，新加的標「同名，請確認」、預設不勾
         _variantSeen.TryGetValue(first, out int before);
+        int together = Math.Max(before, Math.Min(rows.Count, variants.Count));
+        _variantSeen[first] = together;
         int occurrences = _variantOccurrences.TryGetValue(first, out List<HashSet<string>>? occ) ? occ.Count : 0;
-        int seen = Math.Min(variants.Count, Math.Max(before, Math.Max(rows.Count, occurrences)));
-        _variantSeen[first] = seen;
-        bool complete = seen == variants.Count;
+        int seen = Math.Min(variants.Count, Math.Max(together, occurrences));
+        bool complete = together >= variants.Count;
 
         // 有卡片的資訊：第 k 個看到的對應組裡第 k 個（手動指定過的不動）
         for (int k = 0; k < Math.Min(rows.Count, variants.Count); k++)
@@ -1131,7 +1188,7 @@ public sealed class MainForm : Form
         HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f),
             .. _unmatched.Values.Where(u => u != f && u.Item is not null && u.View is { Checked: true }).Select(u => u.Item!)];
         DiscoveryItem item;
-        using (ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below))
+        using (ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue))
         {
             if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem picked)
             {
@@ -1287,6 +1344,13 @@ public sealed class MainForm : Form
         else if (f.VariantUnsure)
         {
             status = $"同名，請確認（共 {f.Match.Variants.Count} 個）";
+            color = UiColors.PickForList(Color.DarkOrange, Color.Orange);
+            check = false;
+        }
+        else if (f.Match.Score == 0)
+        {
+            // 讀不出來、用排序推斷出來的：推斷依賴「這一頁是怎麼排序的」的判斷，預設不勾，請確認
+            status = "推斷，請確認";
             color = UiColors.PickForList(Color.DarkOrange, Color.Orange);
             check = false;
         }
@@ -1501,16 +1565,18 @@ public sealed class MainForm : Form
         _btnTestFile.Enabled = ready;
     }
 
+    // 要使用者確認的（同名分不出是哪一個、不確定、用排序推斷的）；手動指定的已經確認過
+    private static bool NeedsConfirm(Found f)
+        => !f.Manual && (f.VariantUnsure || f.Match.Ambiguous || f.Match.Score == 0);
+
     private void UpdateSummary()
     {
         int character = Character;
         // 和 UpdateRow 的狀態判斷一致（「不確定」的列在 _unmatched 裡，但 Excel 已經打勾的話狀態是「已經打勾」）
         List<Found> all = [.. _matched.Values, .. _unmatched.Values];
         int already = all.Count(f => f.Item is not null && f.Item.Marked[character]);
-        int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character]
-                                      && (f.Manual || (!f.VariantUnsure && !f.Match.Ambiguous)));
-        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character]
-                                    && !f.Manual && (f.VariantUnsure || f.Match.Ambiguous));
+        int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character] && !NeedsConfirm(f));
+        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character] && NeedsConfirm(f));
         int missing = all.Count(f => f.Item is null);
         _lblSummary.Text = $"新增 {newCount}　已經打勾 {already}　不確定 {unsure}　找不到 {missing}";
     }

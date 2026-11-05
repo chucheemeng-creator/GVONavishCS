@@ -33,6 +33,8 @@ public sealed class ItemPickerForm : Form
     private readonly string _below;
     // 已經在清單上的發現物（這次讀到過、或手動指定過）
     private readonly IReadOnlySet<DiscoveryItem> _onList;
+    // 讀到這一列時，那一頁是依價值排列：功績範圍才有意義（依名稱排列時功績是亂的）
+    private readonly bool _pageByValue;
 
     private readonly ComboBox _cboCategory = new();
     private readonly TextBox _txtSearch = new();
@@ -44,8 +46,9 @@ public sealed class ItemPickerForm : Form
     public DiscoveryItem? SelectedItem { get; private set; }
 
     public ItemPickerForm(DiscoveryBook book, string category, string screenText, int character,
-        IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "")
+        IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "", bool pageByValue = false)
     {
+        _pageByValue = pageByValue;
         _book = book;
         _screenText = screenText;
         _character = character;
@@ -93,7 +96,7 @@ public sealed class ItemPickerForm : Form
         top.Controls.Add(MakeLabel("搜尋："), 0, 2);
         _txtSearch.Dock = DockStyle.Fill;
         _txtSearch.PlaceholderText = screenText == ""
-            ? "打字縮小範圍；空白時照 Excel 的順序，粗體是功績介於上下兩列之間、還沒讀到的"
+            ? "打字縮小範圍；空白時照 Excel 的順序（依價值排列時，粗體是功績介於上下兩列之間、還沒讀到的）"
             : "打字縮小範圍（例如「鰭」）；空白時依和畫面文字的相似度排序";
         _txtSearch.TextChanged += (_, _) => Fill();
         _txtSearch.KeyDown += OnSearchKeyDown;
@@ -190,7 +193,7 @@ public sealed class ItemPickerForm : Form
                 meritHigh = Math.Max(a, b);
             }
         }
-        bool hasRange = excelOrder && (aboveIndex >= 0 || belowIndex >= 0);
+        bool hasRange = excelOrder && _pageByValue && (aboveIndex >= 0 || belowIndex >= 0);
         IEnumerable<(DiscoveryItem Item, double Score)> ordered = excelOrder
             ? rows
             : rows.OrderByDescending(r => r.Score).ThenBy(r => r.Item.Name, StringComparer.Ordinal).Take(MaxRows);
@@ -233,28 +236,36 @@ public sealed class ItemPickerForm : Form
 
         if (_list.Items.Count > 0)
         {
-            // Excel 順序時選最近的候選；沒有候選時選在上一列的下一個（或下一列的前一個）
-            int select = 0;
+            // Excel 順序（讀不出來的列）時捲到最近的候選附近；沒有候選時捲到上一列的下一個（或下一列的前一個）
+            int target = 0;
             if (nearest >= 0)
             {
-                select = nearest;
+                target = nearest;
             }
             else if (excelOrder && aboveIndex >= 0)
             {
-                select = Math.Min(aboveIndex + 1, _list.Items.Count - 1);
+                target = Math.Min(aboveIndex + 1, _list.Items.Count - 1);
             }
             else if (excelOrder && belowIndex > 0)
             {
-                select = belowIndex - 1;
+                target = belowIndex - 1;
             }
-            _list.Items[select].Selected = true;
-            _list.Items[select].Focused = true;
-            // 選到的那一列放在畫面中間附近，上下的候選也看得到
-            if (excelOrder && select > 0)
+            if (excelOrder)
             {
-                _list.TopItem = _list.Items[Math.Max(0, select - 4)];
+                // 讀不出來的列只是提示位置，不預先選取：要使用者自己看過名稱點一下，才能按確定（不會按 Enter 就誤選）
+                _list.Items[target].Focused = true;
+                if (target > 0)
+                {
+                    _list.TopItem = _list.Items[Math.Max(0, target - 4)];
+                }
             }
-            _list.Items[select].EnsureVisible();
+            else
+            {
+                // 有畫面文字可以比：預選最像的那一個
+                _list.Items[target].Selected = true;
+                _list.Items[target].Focused = true;
+            }
+            _list.Items[target].EnsureVisible();
         }
         _btnOk.Enabled = _list.SelectedItems.Count > 0;
     }
@@ -320,8 +331,16 @@ public sealed class ItemPickerForm : Form
         {
             return;
         }
-        int index = _list.SelectedIndices.Count > 0 ? _list.SelectedIndices[0] : -1;
-        index = Math.Clamp(index + (e.KeyCode == Keys.Down ? 1 : -1), 0, _list.Items.Count - 1);
+        int index;
+        if (_list.SelectedIndices.Count > 0)
+        {
+            index = Math.Clamp(_list.SelectedIndices[0] + (e.KeyCode == Keys.Down ? 1 : -1), 0, _list.Items.Count - 1);
+        }
+        else
+        {
+            // 還沒選（讀不出來的列只捲到附近）：先選捲到的那一列
+            index = _list.FocusedItem?.Index ?? 0;
+        }
         _list.Items[index].Selected = true;
         _list.Items[index].EnsureVisible();
         e.Handled = true;
