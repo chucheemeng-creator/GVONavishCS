@@ -223,13 +223,30 @@ public sealed class NameMatcher
     /// </summary>
     public List<IReadOnlyList<DiscoveryItem>> Between(string category, string lower, string upper)
     {
+        lower = SortKey(lower);
+        upper = SortKey(upper);
         if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
         {
             return [];
         }
         return [.. list
-            .Where(e => string.CompareOrdinal(e.Items[0].Name, lower) > 0 && string.CompareOrdinal(e.Items[0].Name, upper) < 0)
+            .Where(e => string.CompareOrdinal(SortKey(e.Items[0].Name), lower) > 0 && string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
+    }
+
+    /// <summary>
+    /// 比較「照名稱排序」順序用的名稱：拿掉結尾的數字。
+    /// 遊戲上同名的發現物都顯示成「聖母加冠」，Excel 才寫成「聖母加冠1」「聖母加冠2」，
+    /// 用拿掉數字的名稱比較，順序才和遊戲一致。
+    /// </summary>
+    public static string SortKey(string name)
+    {
+        int end = name.Length;
+        while (end > 0 && char.IsAsciiDigit(name[end - 1]))
+        {
+            end--;
+        }
+        return end == 0 ? name : name[..end];
     }
 
     // a 比 b 好：先看是不是確定對到，再看相似度

@@ -675,8 +675,7 @@ public sealed class MainForm : Form
                 .Select(p => p.Match.Item!)];
             List<(int Index, string Name)> anchors = [.. picks
                 .Where(p => p.Match.IsMatch)
-                .Select(p => (p.Row.Index, p.Match.Item!.Name))];
-            // 已確定的列至少 3 個、而且照編碼由小到大，才當成這一頁是照名稱排序
+                .Select(p => (p.Row.Index, Name: NameMatcher.SortKey(p.Match.Item!.Name)))]; // 比較順序用拿掉結尾數字的名稱
             // 這一頁照名稱排序（DetectSort 判斷的），而且新確定的列也沒有違反，才用上下列的順序排除候選
             bool sorted = sortedByName
                           && anchors.Zip(anchors.Skip(1)).All(z => string.CompareOrdinal(z.First.Name, z.Second.Name) <= 0);
@@ -725,8 +724,8 @@ public sealed class MainForm : Form
                 List<(IReadOnlyList<DiscoveryItem> Items, double Score, string Text)> candidates = [.. merged
                     .Select(kv => (kv.Key, kv.Value.Score, kv.Value.Text))
                     .Where(c => !(c.Key.Count == 1 && claimed.Contains(c.Key[0])))
-                    .Where(c => lower is null || string.CompareOrdinal(c.Key[0].Name, lower) >= 0)
-                    .Where(c => upper is null || string.CompareOrdinal(c.Key[0].Name, upper) <= 0)
+                    .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Key[0].Name), lower) >= 0)
+                    .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Key[0].Name), upper) <= 0)
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {
@@ -799,15 +798,15 @@ public sealed class MainForm : Form
     /// 兩種都符合時不下判斷，免得誤判（列數少時常常兩種都符合）。
     /// 用剛開始玩的玩家模擬過（只有 1%～3% 的發現物）：判斷不出來的時候有，但沒有判斷錯的。
     /// </summary>
-    private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks)
+    private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks, bool remember = true)
     {
         List<int> merits = [.. picks.Where(IsAnchor).Select(p => p.Match.Item!.Merit)];
-        List<string> names = [.. picks.Where(p => p.Match.IsMatch).Select(p => p.Match.Item!.Name)];
+        List<string> names = [.. picks.Where(p => p.Match.IsMatch).Select(p => NameMatcher.SortKey(p.Match.Item!.Name))];
         bool valueOrdered = merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
         bool nameOrdered = names.Zip(names.Skip(1)).All(z => string.CompareOrdinal(z.First, z.Second) <= 0);
 
         bool value4 = valueOrdered && merits.Count >= 4, name4 = nameOrdered && names.Count >= 4;
-        if (value4 != name4)
+        if (remember && value4 != name4)
         {
             _sortMode = value4 ? SortMode.ByValue : SortMode.ByName;
         }
@@ -1026,7 +1025,9 @@ public sealed class MainForm : Form
             return;
         }
         string screen = f.Unreadable ? "" : f.ScreenText;
-        HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f)];
+        // 已經在清單上的：對到的，加上「不確定」但已經被勾選（使用者確認過）的
+        HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f),
+            .. _unmatched.Values.Where(u => u != f && u.Item is not null && u.View is { Checked: true }).Select(u => u.Item!)];
         DiscoveryItem? item;
         // 選的時候暫停讀取：不然背景讀到的結果可能改動這一筆（例如同名的被自動改成組裡的另一個）
         bool wasRunning = _timer.Enabled;
@@ -1216,6 +1217,8 @@ public sealed class MainForm : Form
         _variantOccurrences.Clear();
         _list.Items.Clear();
         _processedMask = null;
+        _lastMask = null;
+        _sortMode = SortMode.Unknown; // 重新開始時重新判斷排序（使用者可能已經按 ⇅ 換了排序）
         UpdateSummary();
     }
 
@@ -1288,7 +1291,8 @@ public sealed class MainForm : Form
                         (string text, MatchResult match) = PickBestReading(category, row);
                         picks.Add((row, text, match));
                     }
-                    ResolveWithinPage(category, picks, DetectSort(picks) == SortMode.ByName);
+                    // 除錯輸出不改變記住的排序方式
+                    ResolveWithinPage(category, picks, DetectSort(picks, remember: false) == SortMode.ByName);
                 }
                 foreach (ListRow row in snapshot.Rows)
                 {
@@ -1389,11 +1393,14 @@ public sealed class MainForm : Form
     private void UpdateSummary()
     {
         int character = Character;
-        int newCount = _matched.Values.Count(f => f.Item is not null && !f.Item.Marked[character] && !f.VariantUnsure);
-        int already = _matched.Values.Count(f => f.Item is not null && f.Item.Marked[character]);
-        int unsure = _unmatched.Values.Count(f => f.Item is not null)
-                     + _matched.Values.Count(f => f.Item is not null && !f.Item.Marked[character] && f.VariantUnsure);
-        int missing = _unmatched.Values.Count(f => f.Item is null);
+        // 和 UpdateRow 的狀態判斷一致（「不確定」的列在 _unmatched 裡，但 Excel 已經打勾的話狀態是「已經打勾」）
+        List<Found> all = [.. _matched.Values, .. _unmatched.Values];
+        int already = all.Count(f => f.Item is not null && f.Item.Marked[character]);
+        int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character]
+                                      && (f.Manual || (!f.VariantUnsure && !f.Match.Ambiguous)));
+        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character]
+                                    && !f.Manual && (f.VariantUnsure || f.Match.Ambiguous));
+        int missing = all.Count(f => f.Item is null);
         _lblSummary.Text = $"新增 {newCount}　已經打勾 {already}　不確定 {unsure}　找不到 {missing}";
     }
 
