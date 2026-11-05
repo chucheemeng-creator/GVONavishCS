@@ -1194,7 +1194,11 @@ public sealed class MainForm : Form
     {
         IReadOnlyList<DiscoveryItem> variants = match.Variants;
         DiscoveryItem first = variants[0];
-        // 同一頁同時看到幾個（照名稱排列時同名的排在一起）：同時看到全部才算確定
+        // 同一頁同時看到幾個（照名稱排列時同名的排在一起）：同時看到全部才算確定。
+        // 刻意不用「清單上這一組已經湊滿」當作確定：清單上的筆數有一部分是靠上下鄰居辨識的身分加的，
+        // 鄰居認錯時同一隻會被算成兩隻；湊滿就確定的話，多算一隻會讓整組（包括沒發現的那一個）都預設打勾。
+        // 實際上很少一直卡在「請確認」：依名稱排列時同名的連在一起，正常捲動一定有一頁同時看到全部；
+        // 依價值排列時同名的分散在各頁，但每一隻會由 AddVariantExact 用上下鄰居的功績各自確定。
         _variantSeen.TryGetValue(first, out int before);
         int together = Math.Max(before, Math.Min(rows.Count, variants.Count));
         _variantSeen[first] = together;
