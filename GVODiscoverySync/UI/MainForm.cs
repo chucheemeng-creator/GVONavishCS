@@ -487,13 +487,15 @@ public sealed class MainForm : Form
             }
             catch (ExcelWriteException ex)
             {
-                // 原檔沒有被改動；記憶體從磁碟重新讀一次，和檔案保持一致
+                // 記憶體從磁碟重新讀一次，和檔案保持一致（讀不出來就維持原狀）
                 _book.ReloadMarks();
                 RefreshAllRows();
                 UpdateSummary();
-                string backupNote = ex.BackupPath == ""
-                    ? "（還沒開始備份，原檔沒有被改動）"
-                    : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
+                string backupNote = ex.FileMayBeModified
+                    ? $"存檔途中出錯，原檔可能已經部分改動（甚至損壞）。\n請關閉程式，用寫入前的備份蓋回原檔：\n{ex.BackupPath}"
+                    : ex.BackupPath == ""
+                        ? "（還沒開始備份，原檔沒有被改動）"
+                        : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
                 MessageBox.Show(this, $"寫入失敗：\n\n{ex.Message}\n\n{backupNote}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -902,6 +904,8 @@ public sealed class MainForm : Form
     ///   1. 同一頁的每一列都是不同的發現物：別列已經確定的，不會是這一列（同名的一組除外）
     ///   2. 清單照名稱的字元編碼排序時（預設的排序；按 ⇅ 換過排序就不是），這一列一定排在上下已確定的兩列之間
     /// 排除之後只剩一個、或第一名明顯領先，就當成確定。新確定的列可以再幫忙推斷別列，所以最多做 3 輪。
+    /// 注意：只排除「這一頁」已確定的，不排除前幾頁對到的（_matched）。捲動時上下頁大部分重疊，
+    /// 這一列很可能就是前幾頁已經對到的那一個、只是這次讀錯了；排除它會被推成另一個沒發現的發現物並預設打勾。
     /// </summary>
     private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool sortedByName)
     {

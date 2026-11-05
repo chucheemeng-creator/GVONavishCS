@@ -239,6 +239,7 @@ public sealed class DiscoveryBook
         }
 
         string backup = "";
+        bool saving = false; // 開始存檔之後才出錯的話，原檔可能已經寫了一部分
         try
         {
             EnsureNotOpenElsewhere();
@@ -312,6 +313,7 @@ public sealed class DiscoveryBook
                 workbook.CalculationProperties ??= new CalculationProperties();
                 workbook.CalculationProperties.FullCalculationOnLoad = true;
 
+                saving = true;
                 doc.Save(); // 全部改完才存
             }
 
@@ -324,7 +326,7 @@ public sealed class DiscoveryBook
         }
         catch (Exception ex) when (ex is not ExcelWriteException)
         {
-            throw new ExcelWriteException(ex.Message, backup, ex);
+            throw new ExcelWriteException(ex.Message, backup, saving, ex);
         }
     }
 
@@ -506,8 +508,15 @@ public sealed class DiscoveryBook
 /// <summary>寫入結果：備份檔、實際打勾的、因為列號對不上名稱而跳過的。</summary>
 public sealed record WriteResult(string BackupPath, IReadOnlyList<DiscoveryItem> Written, IReadOnlyList<DiscoveryItem> Skipped);
 
-/// <summary>寫入 Excel 失敗。BackupPath 是已經做好的備份（還沒做好時是 ""），原檔沒有被改動。</summary>
-public sealed class ExcelWriteException(string message, string backupPath, Exception inner) : IOException(message, inner)
+/// <summary>
+/// 寫入 Excel 失敗。BackupPath 是已經做好的備份（還沒做好時是 ""）。
+/// FileMayBeModified：存檔途中才出錯，原檔可能已經寫了一部分（可能損壞），要用備份還原；
+/// false 時是存檔之前就出錯，原檔沒有被改動。
+/// </summary>
+public sealed class ExcelWriteException(string message, string backupPath, bool fileMayBeModified, Exception inner)
+    : IOException(message, inner)
 {
     public string BackupPath { get; } = backupPath;
+
+    public bool FileMayBeModified { get; } = fileMayBeModified;
 }
