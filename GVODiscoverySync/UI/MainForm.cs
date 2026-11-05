@@ -1040,8 +1040,15 @@ public sealed class MainForm : Form
     {
         // 這一列（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它，什麼都不動。
         // 要放在最前面：否則下面會先把佔住這個發現物的那一筆挪走，然後才發現不用加
-        if (occurrence is not null && _matched.Values.Any(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)))
+        if (occurrence is not null
+            && _matched.Values.FirstOrDefault(f => f.Occurrence == occurrence && (f.Manual || !f.VariantUnsure)) is Found confirmed)
         {
+            // 這次才看到卡片的話補上卡片標記（手動指定的不動；不影響勾選）
+            if (hasCard && !confirmed.HasCard && !confirmed.Manual)
+            {
+                confirmed.HasCard = true;
+                UpdateRow(confirmed, resetCheck: false);
+            }
             return false;
         }
         if (_matched.TryGetValue(item, out Found? existing))
