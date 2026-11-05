@@ -86,6 +86,8 @@ public sealed class MainForm : Form
     private readonly Dictionary<DiscoveryItem, List<HashSet<string>>> _variantOccurrences = [];
 
     private bool _busy;
+    // 視窗正在關閉：還在跑的辨識回來後不要再碰畫面
+    private bool _closing;
     // 一頁一頁加入清單時暫停重繪（AddView 不各自捲動，結束後只捲到最後加入的那一筆）
     private bool _batching;
     private ListViewItem? _lastAdded;
@@ -167,7 +169,7 @@ public sealed class MainForm : Form
         _cboCharacter.SelectedIndexChanged += (_, _) => OnCharacterChanged();
         buttons.Controls.Add(_cboCharacter);
         SetupButton(_btnStart, "開始讀取", (_, _) => ToggleReading());
-        SetupButton(_btnWrite, "寫入 Excel", (_, _) => WriteExcel());
+        SetupButton(_btnWrite, "寫入 Excel", async (_, _) => await WriteExcelAsync());
         SetupButton(_btnClear, "清除結果", (_, _) => ClearResults());
         SetupButton(_btnSaveScreen, "存下遊戲畫面", async (_, _) => await SaveScreenAsync());
         SetupButton(_btnTestFile, "用截圖檔測試…", async (_, _) => await TestFromFileAsync());
@@ -193,7 +195,7 @@ public sealed class MainForm : Form
         _list.Columns.Add("卡片", 45, HorizontalAlignment.Center);
         _list.Columns.Add("狀態", 120);
         ContextMenuStrip menu = new();
-        ToolStripMenuItem assignItem = new("指定 Excel 發現物…", null, (_, _) => AssignSelected()) { ShortcutKeyDisplayString = "Enter" };
+        ToolStripMenuItem assignItem = new("指定 Excel 發現物…", null, async (_, _) => await AssignSelectedAsync()) { ShortcutKeyDisplayString = "Enter" };
         ToolStripMenuItem removeItem = new("移除這一筆", null, (_, _) => RemoveSelected()) { ShortcutKeyDisplayString = "Delete" };
         menu.Items.AddRange([assignItem, removeItem]);
         menu.Opening += (_, e) =>
@@ -208,8 +210,8 @@ public sealed class MainForm : Form
         {
             if (e.KeyCode == Keys.Enter)
             {
-                AssignSelected();
                 e.Handled = true;
+                _ = AssignSelectedAsync();
             }
             else if (e.KeyCode == Keys.Delete)
             {
@@ -341,52 +343,99 @@ public sealed class MainForm : Form
         UpdateSummary();
     }
 
-    private void WriteExcel()
+    private async Task WriteExcelAsync()
     {
         if (_book is null)
         {
             return;
         }
-        int character = Character;
-        List<DiscoveryItem> items = [.. _matched.Values.Concat(_unmatched.Values)
-            .Where(f => f.View is { Checked: true } && f.Item is not null && !f.Item.Marked[character])
-            .Select(f => f.Item!)
-            .Distinct()];
-        if (items.Count == 0)
-        {
-            MessageBox.Show(this, "沒有要寫入的發現物（勾選「新增」的項目才會寫入）。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-        string name = _book.CharacterNames[character];
-        if (MessageBox.Show(this,
-                $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先把原檔備份到 Excel 所在資料夾的 backup 資料夾。\n寫入時 Excel 必須是關閉的。",
-                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
-        {
-            return;
-        }
-
-        bool wasRunning = _timer.Enabled;
-        _timer.Stop();
+        // 先停止讀取、等正在跑的那一輪辨識結束，再抓要寫入的名單：
+        // 不然確認視窗開著時，背景辨識還可能改動清單，畫面上看到的和實際寫入的會不一樣
+        bool wasRunning = await PauseReadingAsync();
         try
         {
-            Cursor = Cursors.WaitCursor;
-            string backup = _book.WriteMarks(character, items);
-            RefreshAllRows();
-            UpdateSummary();
-            MessageBox.Show(this, $"已寫入 {items.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(backup)}",
-                Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "寫入失敗：\n\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (_closing || IsDisposed)
+            {
+                return;
+            }
+            int character = Character;
+            List<DiscoveryItem> items = [.. _matched.Values.Concat(_unmatched.Values)
+                .Where(f => f.View is { Checked: true } && f.Item is not null && !f.Item.Marked[character])
+                .Select(f => f.Item!)
+                .Distinct()];
+            if (items.Count == 0)
+            {
+                MessageBox.Show(this, "沒有要寫入的發現物（勾選「新增」的項目才會寫入）。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            string name = _book.CharacterNames[character];
+            if (MessageBox.Show(this,
+                    $"要幫「{name}」在 {items.Count} 個發現物打勾嗎？\n\n寫入前會先把原檔備份到 Excel 所在資料夾的 backup 資料夾。\n寫入時 Excel 必須是關閉的。",
+                    Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
+            {
+                return;
+            }
+
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                WriteResult result = _book.WriteMarks(character, items);
+                RefreshAllRows();
+                UpdateSummary();
+                string message = $"已寫入 {result.Written.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(result.BackupPath)}";
+                if (result.Skipped.Count > 0)
+                {
+                    // 讀檔之後 Excel 被改過（插列、排序、換版本）：列號對不上名稱的沒有寫，請重新選一次 Excel 再寫
+                    message += $"\n\n有 {result.Skipped.Count} 筆沒有寫入：Excel 在讀取之後被改過（例如插列、排序），" +
+                               "那一列已經不是這個發現物了。請按「選擇…」重新讀取 Excel，再讀一次清單後寫入。\n\n" +
+                               string.Join("\n", result.Skipped.Take(10).Select(i => $"・{i.Category}／{i.Name}")) +
+                               (result.Skipped.Count > 10 ? $"\n……還有 {result.Skipped.Count - 10} 筆" : "");
+                }
+                MessageBox.Show(this, message, Text, MessageBoxButtons.OK,
+                    result.Skipped.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            }
+            catch (ExcelWriteException ex)
+            {
+                // 原檔沒有被改動；記憶體從磁碟重新讀一次，和檔案保持一致
+                _book.ReloadMarks();
+                RefreshAllRows();
+                UpdateSummary();
+                string backupNote = ex.BackupPath == ""
+                    ? "（還沒開始備份，原檔沒有被改動）"
+                    : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
+                MessageBox.Show(this, $"寫入失敗：\n\n{ex.Message}\n\n{backupNote}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
         }
         finally
         {
-            Cursor = Cursors.Default;
-            if (wasRunning)
-            {
-                _timer.Start();
-            }
+            ResumeReading(wasRunning);
+        }
+    }
+
+    /// <summary>
+    /// 停止讀取，並等正在跑的那一輪辨識結束（最多等 10 秒）。回傳原本是不是在讀取中，給 ResumeReading 用。
+    /// </summary>
+    private async Task<bool> PauseReadingAsync()
+    {
+        bool wasRunning = _timer.Enabled;
+        _timer.Stop();
+        for (int i = 0; i < 200 && _busy; i++)
+        {
+            await Task.Delay(50);
+        }
+        return wasRunning;
+    }
+
+    private void ResumeReading(bool wasRunning)
+    {
+        if (wasRunning && !_closing && !IsDisposed)
+        {
+            _lastMask = null; // 重新確認畫面停下來了再讀
+            _timer.Start();
         }
     }
 
@@ -411,7 +460,7 @@ public sealed class MainForm : Form
 
     private async void OnTimerTick(object? sender, EventArgs e)
     {
-        if (_busy || _reader is null || _matcher is null)
+        if (_busy || _closing || IsDisposed || _reader is null || _matcher is null)
         {
             return;
         }
@@ -433,7 +482,10 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            SetStatus("讀取時發生錯誤：" + ex.Message);
+            if (!_closing && !IsDisposed)
+            {
+                SetStatus("讀取時發生錯誤：" + ex.Message);
+            }
         }
         finally
         {
@@ -469,6 +521,10 @@ public sealed class MainForm : Form
 
         NameMatcher matcher = _matcher;
         ListSnapshot snapshot = await _reader.ReadAsync(client, scale, t => matcher.MatchCategory(t) is not null);
+        if (_closing || IsDisposed)
+        {
+            return; // 辨識的時候視窗關掉了
+        }
         // 分類：先看標題；標題讀不到（常常如此）就從清單上的名稱推測
         string? category = _matcher.MatchCategory(snapshot.TitleText);
         string how = "";
@@ -1046,9 +1102,27 @@ public sealed class MainForm : Form
 
     private Found? SelectedFound => _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Found : null;
 
-    private void AssignSelected()
+    private async Task AssignSelectedAsync()
     {
         if (_book is null || _matcher is null || SelectedFound is not Found f)
+        {
+            return;
+        }
+        // 選的時候暫停讀取，並等正在跑的那一輪辨識結束：不然背景讀到的結果可能改動這一筆
+        bool wasRunning = await PauseReadingAsync();
+        try
+        {
+            AssignCore(f);
+        }
+        finally
+        {
+            ResumeReading(wasRunning);
+        }
+    }
+
+    private void AssignCore(Found f)
+    {
+        if (_book is null || _closing || IsDisposed || f.View is null || !_list.Items.Contains(f.View))
         {
             return;
         }
@@ -1056,30 +1130,14 @@ public sealed class MainForm : Form
         // 已經在清單上的：對到的，加上「不確定」但已經被勾選（使用者確認過）的
         HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f),
             .. _unmatched.Values.Where(u => u != f && u.Item is not null && u.View is { Checked: true }).Select(u => u.Item!)];
-        DiscoveryItem? item;
-        // 選的時候暫停讀取：不然背景讀到的結果可能改動這一筆（例如同名的被自動改成組裡的另一個）
-        bool wasRunning = _timer.Enabled;
-        _timer.Stop();
-        try
+        DiscoveryItem item;
+        using (ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below))
         {
-            using ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below);
-            if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is null)
+            if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem picked)
             {
                 return;
             }
-            item = dlg.SelectedItem;
-        }
-        finally
-        {
-            if (wasRunning)
-            {
-                _lastMask = null; // 重新確認畫面停下來了再讀
-                _timer.Start();
-            }
-        }
-        if (item is null || f.View is null || !_list.Items.Contains(f.View))
-        {
-            return; // 這一筆在選的時候已經不在清單上了
+            item = picked;
         }
 
         if (_matched.TryGetValue(item, out Found? other) && other != f)
@@ -1319,6 +1377,10 @@ public sealed class MainForm : Form
                     b.Save(stem + "-list.png", ImageFormat.Png);
                 }
                 ListSnapshot snapshot = await _reader.ReadAsync(client, scale);
+                if (_closing || IsDisposed)
+                {
+                    return;
+                }
                 List<string> lines =
                 [
                     $"縮放 {scale}、辨識放大 {_reader.OcrScale} 倍、語言 {_reader.LanguageName}",
@@ -1402,6 +1464,10 @@ public sealed class MainForm : Form
     {
         foreach (string path in files)
         {
+            if (_closing || IsDisposed)
+            {
+                return;
+            }
             try
             {
                 using Bitmap bmp = new(path);
@@ -1507,6 +1573,7 @@ public sealed class MainForm : Form
             e.Cancel = true;
             return;
         }
+        _closing = true;
         _timer.Stop();
         Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         _settings.WindowX = bounds.X;
