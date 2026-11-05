@@ -217,6 +217,21 @@ public sealed class NameMatcher
         return result;
     }
 
+    /// <summary>
+    /// 分類裡名稱的字元編碼介於 lower 和 upper 之間（不含）的發現物（同名的一組算一個）。
+    /// 給「讀不出來的列」推斷用：清單照名稱排序時，這一列一定在上下兩列之間。
+    /// </summary>
+    public List<IReadOnlyList<DiscoveryItem>> Between(string category, string lower, string upper)
+    {
+        if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
+        {
+            return [];
+        }
+        return [.. list
+            .Where(e => string.CompareOrdinal(e.Items[0].Name, lower) > 0 && string.CompareOrdinal(e.Items[0].Name, upper) < 0)
+            .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
+    }
+
     // a 比 b 好：先看是不是確定對到，再看相似度
     private static bool IsBetter(MatchResult a, MatchResult b)
         => a.IsMatch != b.IsMatch ? a.IsMatch : a.Score > b.Score;

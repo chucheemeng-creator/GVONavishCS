@@ -44,6 +44,11 @@ public sealed class MainForm : Form
         /// <summary>同名的一組還沒全部看到，不確定是組裡的哪一個。</summary>
         public bool VariantUnsure { get; set; }
 
+        /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
+        public bool Unreadable { get; init; }
+
+        public string Note { get; init; } = "";
+
         public DiscoveryItem? Item => Assigned ?? Match.Item;
     }
 
@@ -81,6 +86,11 @@ public sealed class MainForm : Form
     public MainForm(AppSettings settings)
     {
         _settings = settings;
+        // 還沒有設定檔時先寫一份預設的（放在程式資料夾），方便直接編輯錯字對照表等設定
+        if (!File.Exists(AppSettings.FilePath))
+        {
+            settings.Save();
+        }
         _reader = DiscoveryListReader.TryCreate(settings.Layout);
         if (_reader is not null)
         {
@@ -419,7 +429,7 @@ public sealed class MainForm : Form
         string how = "";
         if (category is null)
         {
-            category = _matcher.GuessCategory([.. snapshot.Rows.Select(r => r.Text)]);
+            category = _matcher.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);
             how = "（分類由清單內容判斷）";
         }
         if (category is null)
@@ -442,8 +452,20 @@ public sealed class MainForm : Form
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<(string Text, bool HasCard)> Rows)> variantRows = [];
-        foreach ((ListRow row, string text, MatchResult match) in picks)
+        for (int i = 0; i < picks.Count; i++)
         {
+            (ListRow row, string text, MatchResult match) = picks[i];
+            if (row.Readings.Count == 0 && !match.IsMatch)
+            {
+                // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
+                string above = i > 0 ? NameOf(picks[i - 1]) : "";
+                string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
+                if (AddUnreadable(category, above, below))
+                {
+                    added++;
+                }
+                continue;
+            }
             if (match.IsMatch && match.IsVariant)
             {
                 DiscoveryItem first = match.Variants[0];
@@ -471,6 +493,35 @@ public sealed class MainForm : Form
         }
         SetStatus($"{category}{how}：這一頁讀到 {snapshot.Rows.Count} 筆，新出現 {added} 筆。這個分類目前對到 {listed}／{total} 個。");
         UpdateSummary();
+    }
+
+    // 一列的名稱（對得到 Excel 就用 Excel 的寫法，否則用讀到的）
+    private static string NameOf((ListRow Row, string Text, MatchResult Match) pick)
+        => pick.Match.Item?.Name ?? pick.Text;
+
+    /// <summary>加入一筆「有字但讀不出來」的列。同一個位置（上下兩個發現物一樣）已經有了就回傳 false。</summary>
+    private bool AddUnreadable(string category, string above, string below)
+    {
+        string key = category + "\n?" + above + "|" + below;
+        if (_unmatched.ContainsKey(key))
+        {
+            return false;
+        }
+        string note = (above, below) switch
+        {
+            ("", "") => "位置不明",
+            ("", _) => $"在「{below}」上面",
+            (_, "") => $"在「{above}」下面",
+            _ => $"在「{above}」和「{below}」之間",
+        };
+        Found found = new()
+        {
+            Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
+            Unreadable = true, Note = note,
+        };
+        _unmatched[key] = found;
+        AddView(found);
+        return true;
     }
 
     // 同一列用不同倍率讀到好幾種結果時，挑對得上而且最像的那個
@@ -524,6 +575,24 @@ public sealed class MainForm : Form
                 }
                 string? lower = sorted ? anchors.Where(a => a.Index < row.Index).Select(a => a.Name).LastOrDefault() : null;
                 string? upper = sorted ? anchors.Where(a => a.Index > row.Index).Select(a => a.Name).FirstOrDefault() : null;
+
+                // 整列讀不出來：照名稱排序、上下都有確定的列，而且中間只有一個還沒對到的發現物，就是它
+                if (row.Readings.Count == 0)
+                {
+                    if (lower is not null && upper is not null)
+                    {
+                        List<IReadOnlyList<DiscoveryItem>> between = [.. _matcher.Between(category, lower, upper)
+                            .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))];
+                        if (between.Count == 1)
+                        {
+                            IReadOnlyList<DiscoveryItem> only = between[0];
+                            // 相似度 0 表示是推斷出來的（畫面上顯示「推斷」）
+                            picks[i] = (row, "", new MatchResult(only[0], 0, false, only.Count > 1 ? only : []));
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
 
                 // 每種倍率讀到的結果都列出候選，同一個候選取最高分
                 Dictionary<IReadOnlyList<DiscoveryItem>, (double Score, string Text)> merged = [];
@@ -657,15 +726,23 @@ public sealed class MainForm : Form
         }
         int character = Character;
         view.SubItems[0].Text = f.Category;
-        view.SubItems[1].Text = f.ScreenText;
-        view.SubItems[2].Text = f.Item?.Name ?? "";
-        view.SubItems[3].Text = f.Item is null ? "" : f.Match.Score.ToString("0%", CultureInfo.InvariantCulture);
+        view.SubItems[1].Text = f.ScreenText == "" ? "（讀不出來）" : f.ScreenText;
+        view.SubItems[2].Text = f.Item?.Name ?? f.Note;
+        view.SubItems[3].Text = f.Item is null ? ""
+            : f.Match.Score == 0 ? "推斷"
+            : f.Match.Score.ToString("0%", CultureInfo.InvariantCulture);
         view.SubItems[4].Text = f.HasCard ? "✔" : "";
 
         string status;
         Color color;
         bool check;
-        if (f.Item is null)
+        if (f.Unreadable)
+        {
+            status = "讀不出來，請手動確認";
+            color = UiColors.PickForList(Color.Firebrick, Color.FromArgb(255, 140, 110));
+            check = false;
+        }
+        else if (f.Item is null)
         {
             status = "找不到";
             color = UiColors.PickForList(Color.Firebrick, Color.FromArgb(255, 140, 110));
@@ -769,9 +846,35 @@ public sealed class MainForm : Form
                 [
                     $"縮放 {scale}、辨識放大 {_reader.OcrScale} 倍、語言 {_reader.LanguageName}",
                     $"標題：「{snapshot.TitleText}」（{snapshot.TitleScale} 倍）→ 分類：{_matcher?.MatchCategory(snapshot.TitleText) ?? "（對不到）"}",
-                    $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Select(r => r.Text)]) ?? "（推測不出來）"}",
-                    .. snapshot.Rows.Select(r => $"第 {r.Index + 1} 列：「{string.Join("」「", r.Readings)}」{(r.HasCard ? "（有卡片）" : "")}"),
+                    $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]) ?? "（推測不出來）"}",
                 ];
+                // 每一列：辨識讀到的原文 → 比對結果（套用錯字對照表、同一頁推斷之後，和實際讀取時一樣）
+                string? category = _matcher?.MatchCategory(snapshot.TitleText)
+                                   ?? _matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);
+                List<(ListRow Row, string Text, MatchResult Match)> picks = [];
+                if (category is not null)
+                {
+                    foreach (ListRow row in snapshot.Rows)
+                    {
+                        (string text, MatchResult match) = PickBestReading(category, row);
+                        picks.Add((row, text, match));
+                    }
+                    ResolveWithinPage(category, picks);
+                }
+                foreach (ListRow row in snapshot.Rows)
+                {
+                    string read = row.Readings.Count == 0 ? "（讀不出來）" : "「" + string.Join("」「", row.Readings) + "」";
+                    string result = "";
+                    int at = picks.FindIndex(p => p.Row == row);
+                    if (at >= 0)
+                    {
+                        MatchResult m = picks[at].Match;
+                        result = m.Item is null ? " → 找不到"
+                            : $" → {m.Item.Name}（{(m.Score == 0 ? "推斷" : m.Score.ToString("0%", CultureInfo.InvariantCulture))}" +
+                              $"{(m.Ambiguous ? "，不確定" : "")}{(m.IsVariant ? "，同名的一組" : "")}）";
+                    }
+                    lines.Add($"第 {row.Index + 1} 列：{read}{(row.HasCard ? "（有卡片）" : "")}{result}");
+                }
                 File.WriteAllLines(stem + ".txt", lines);
             }
             SetStatus("已存下遊戲畫面：" + path);

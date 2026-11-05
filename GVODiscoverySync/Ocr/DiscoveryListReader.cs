@@ -28,6 +28,7 @@ namespace GVODiscoverySync.Ocr;
 /// <summary>
 /// 清單上的一列。Index 是畫面上的第幾列（0 起算）。
 /// Readings 是用不同放大倍率讀到的結果（同一列換個倍率常常就讀對了，由呼叫端挑最像的）；Text 是第一個。
+/// 這一列有字、但怎麼讀都讀不出來時（常見於一、兩個字的短名稱，例如「蠶」），Readings 是空的、Text 是 ""。
 /// </summary>
 public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings);
 
@@ -239,11 +240,39 @@ public sealed class DiscoveryListReader
             }
         }
 
+        // 有字但整列都沒讀到的（短名稱常常這樣）：單獨把這一列裁出來，換幾種倍率再讀
+        for (int row = 0; row < Layout.RowCount; row++)
+        {
+            if (readings.ContainsKey(row))
+            {
+                continue;
+            }
+            Rectangle rowRect = RowRect(listRect, row, scale);
+            if (!HasText(client, rowRect, scale))
+            {
+                continue; // 空白列（分類的最後一頁不滿 10 列）
+            }
+            List<string> texts = [];
+            double[] rowScales = [OcrScale, 4, 2, 5];
+            foreach (double s in rowScales.Distinct())
+            {
+                PreparedImage rowImage = Prepare(client, rowRect, scale, s, 1);
+                using SoftwareBitmap bitmap = rowImage.ToSoftwareBitmap();
+                OcrResult result = await _engine.RecognizeAsync(bitmap);
+                string text = string.Concat(result.Lines.Select(JoinWords));
+                if (text != "" && !texts.Contains(text))
+                {
+                    texts.Add(text);
+                }
+            }
+            readings[row] = texts; // 還是讀不出來時是空的，由呼叫端推斷或提示
+        }
+
         Rectangle iconRect = IconRect(client.Size, scale);
         List<ListRow> rows = [];
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
-            rows.Add(new ListRow(row, texts[0], HasCardIcon(client, iconRect, row, scale), texts));
+            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -296,6 +325,37 @@ public sealed class DiscoveryListReader
     public (PreparedImage Title, PreparedImage List) PrepareForDebug(Bitmap client, double scale)
         => (Prepare(client, TitleRect(client.Size, scale), scale, OcrScale, 1),
             Prepare(client, ListRect(client.Size, scale), scale, OcrScale, Layout.RowCount));
+
+    // 清單的第 row 列（螢幕像素）
+    private Rectangle RowRect(Rectangle listRect, int row, double scale)
+    {
+        int top = listRect.Y + (int)Math.Round(row * Layout.RowHeight * scale);
+        int height = (int)Math.Round(Layout.RowHeight * scale);
+        return Rectangle.Intersect(new Rectangle(listRect.X, top, listRect.Width, height), listRect);
+    }
+
+    // 這一塊有沒有字：夠亮（字的亮度）的點夠多。一個字大約有 50 個點（遊戲原本的像素）是筆畫
+    private static bool HasText(Bitmap client, Rectangle r, double scale)
+    {
+        if (r.Width <= 0 || r.Height <= 0)
+        {
+            return false;
+        }
+        byte[] bytes = GetPixelBytes(client, r, out int stride);
+        int count = 0;
+        for (int y = 0; y < r.Height; y++)
+        {
+            for (int x = 0; x < r.Width; x++)
+            {
+                int o = y * stride + x * 4;
+                if (Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2])) >= TextThreshold)
+                {
+                    count++;
+                }
+            }
+        }
+        return count >= 25 * scale * scale;
+    }
 
     // 中文辨識結果每個字之間有空白，接起來
     private static string JoinWords(OcrLine line)
