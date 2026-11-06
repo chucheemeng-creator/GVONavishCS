@@ -164,10 +164,13 @@ public sealed class NameMatcher
         return bestCount >= 1 && bestCount > second && bestCount * 2 >= texts.Count ? best : null;
     }
 
-    /// <summary>在分類 category 裡找名稱 text 對應的發現物（照原樣、套用錯字對照表各比一次，取比較好的）。</summary>
-    public MatchResult Match(string category, string text)
+    /// <summary>
+    /// 在分類 category 裡找名稱 text 對應的發現物（照原樣、套用錯字對照表各比一次，取比較好的）。
+    /// width 是畫面上量到的字寬（遊戲像素，0 表示沒量到）：字數對不上的名稱不列入比對（讀到的字完全一樣時除外）。
+    /// </summary>
+    public MatchResult Match(string category, string text, double width = 0)
     {
-        MatchResult plain = MatchRaw(category, text);
+        MatchResult plain = MatchRaw(category, text, width);
         if (_confusions.Count == 0 || plain.Score >= 1)
         {
             return plain;
@@ -181,15 +184,16 @@ public sealed class NameMatcher
         {
             return plain;
         }
-        MatchResult corrected = MatchRaw(category, fixedText);
+        MatchResult corrected = MatchRaw(category, fixedText, width);
         return IsBetter(corrected, plain) ? corrected : plain;
     }
 
     /// <summary>
     /// 所有相似度達到 MinScore 的候選（照原樣、套用錯字對照表都算，取比較高的），由高到低排序。
     /// 給「同一頁推斷」用：呼叫端排除不可能的候選後，自己判斷剩下的是不是夠確定。
+    /// width 和 Match 一樣：字數對不上的名稱不列入候選。
     /// </summary>
-    public List<(IReadOnlyList<DiscoveryItem> Items, double Score)> Candidates(string category, string text)
+    public List<(IReadOnlyList<DiscoveryItem> Items, double Score)> Candidates(string category, string text, double width = 0)
     {
         if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
         {
@@ -209,6 +213,10 @@ public sealed class NameMatcher
         }
         foreach ((string k, List<DiscoveryItem> items) in list)
         {
+            if (k != key && k != fixedKey && !FitsWidth(items, width))
+            {
+                continue;
+            }
             double s = Math.Max(k == key ? 1 : Similarity(key, k), fixedKey == key ? 0 : (k == fixedKey ? 1 : Similarity(fixedKey, k)));
             if (s >= MinScore)
             {
@@ -255,7 +263,7 @@ public sealed class NameMatcher
     private static bool IsBetter(MatchResult a, MatchResult b)
         => a.IsMatch != b.IsMatch ? a.IsMatch : a.Score > b.Score;
 
-    private MatchResult MatchRaw(string category, string text)
+    private MatchResult MatchRaw(string category, string text, double width)
     {
         string key = Normalize(text);
         if (key == "" || !_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
@@ -272,6 +280,10 @@ public sealed class NameMatcher
             if (k == key)
             {
                 return Result(items, 1, false); // 完全一樣，不用再比
+            }
+            if (!FitsWidth(items, width))
+            {
+                continue; // 字數對不上（例如讀到「鳳蝶」、畫面上是四個字寬，就不會是「黑鳳蝶」）
             }
             double s = Similarity(key, k);
             if (key.Length < k.Length && CommonSubsequence(key, k) == key.Length)
@@ -309,6 +321,51 @@ public sealed class NameMatcher
         string r = Normalize(read);
         string n = StripNumber(Normalize(name));
         return r != "" && r.Length < n.Length && CommonSubsequence(r, n) == r.Length;
+    }
+
+    /// <summary>遊戲清單的字型：中文（全形）字每個 16 遊戲像素寬，半形字 8。</summary>
+    public const double FullWidthCharPixels = 16;
+
+    // 量到的寬度和預期的寬度可以差多少（遊戲像素）：比半個中文字小，相差一個字時一定分得出來
+    private const double WidthTolerance = 7;
+
+    /// <summary>
+    /// 名稱的字數和畫面上量到的字寬（width，遊戲像素）對不對得上。width 是 0（沒量到）時都算對得上。
+    /// 同名的一組只要其中一個對得上就算。
+    /// </summary>
+    public static bool FitsWidth(IReadOnlyList<DiscoveryItem> items, double width)
+        => width <= 0 || items.Any(i => FitsWidth(i.Name, width));
+
+    /// <summary>名稱 name 的字數和畫面上量到的字寬（width，遊戲像素）對不對得上。width 是 0（沒量到）時都算對得上。</summary>
+    public static bool FitsWidth(string name, double width)
+    {
+        if (width <= 0)
+        {
+            return true;
+        }
+        // 遊戲上同名的一組不顯示結尾的數字（Excel 才有），有沒有數字兩種都算
+        return Fits(name) || Fits(SortKey(name));
+
+        bool Fits(string n)
+        {
+            (int min, int max) = WidthUnits(n);
+            // 量到的是第一個字的左邊到最後一個字的右邊，比字的間距少大約 2 遊戲像素
+            double half = FullWidthCharPixels / 2;
+            return width >= min * half - 2 - WidthTolerance && width <= max * half - 2 + WidthTolerance;
+        }
+    }
+
+    // 名稱的寬度範圍（半形字的單位，中文字算 2）。英數字、間隔號（·・‧）、括號等的寬度沒實測過，算 1～2
+    private static (int Min, int Max) WidthUnits(string name)
+    {
+        int min = 0, max = 0;
+        foreach (char c in name.Trim())
+        {
+            bool unsure = c < 0x80 || c is '·' or '・' or '‧' or '．' or '（' or '）' or '－' or '　';
+            min += unsure ? 1 : 2;
+            max += 2;
+        }
+        return (min, max);
     }
 
     private static MatchResult Result(List<DiscoveryItem> items, double score, bool ambiguous)

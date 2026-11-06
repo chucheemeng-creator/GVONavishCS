@@ -889,7 +889,7 @@ public sealed class MainForm : Form
         MatchResult? best = null;
         foreach (string text in row.Readings)
         {
-            MatchResult m = _matcher!.Match(category, text);
+            MatchResult m = _matcher!.Match(category, text, row.TextWidth);
             if (best is null || (m.IsMatch && !best.IsMatch) || (m.IsMatch == best.IsMatch && m.Score > best.Score))
             {
                 best = m;
@@ -942,7 +942,8 @@ public sealed class MainForm : Form
                     if (lower is not null && upper is not null)
                     {
                         List<IReadOnlyList<DiscoveryItem>> between = [.. _matcher.Between(category, lower, upper)
-                            .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))];
+                            .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
+                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))]; // 字數也要對得上
                         if (between.Count == 1)
                         {
                             IReadOnlyList<DiscoveryItem> only = between[0];
@@ -959,7 +960,7 @@ public sealed class MainForm : Form
                 Dictionary<DiscoveryItem, (IReadOnlyList<DiscoveryItem> Items, double Score, string Text)> merged = [];
                 foreach (string reading in row.Readings)
                 {
-                    foreach ((IReadOnlyList<DiscoveryItem> items, double score) in _matcher.Candidates(category, reading))
+                    foreach ((IReadOnlyList<DiscoveryItem> items, double score) in _matcher.Candidates(category, reading, row.TextWidth))
                     {
                         if (!merged.TryGetValue(items[0], out (IReadOnlyList<DiscoveryItem> Items, double Score, string Text) old)
                             || score > old.Score)
@@ -1733,7 +1734,10 @@ public sealed class MainForm : Form
                 }
                 foreach (ListRow row in snapshot.Rows)
                 {
-                    string read = row.Readings.Count == 0 ? "（讀不出來）" : "「" + string.Join("」「", row.Readings) + "」";
+                    string read = (row.Readings.Count == 0 ? "（讀不出來）" : "「" + string.Join("」「", row.Readings) + "」")
+                        + (row.TextWidth > 0
+                            ? $"（寬 {row.TextWidth.ToString("0", CultureInfo.InvariantCulture)}，約 {((row.TextWidth + 2) / NameMatcher.FullWidthCharPixels).ToString("0.#", CultureInfo.InvariantCulture)} 個字）"
+                            : "");
                     string result = "";
                     int at = picks.FindIndex(p => p.Row == row);
                     if (at >= 0)
