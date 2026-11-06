@@ -6,6 +6,8 @@
 //   - 全形英數字轉半形、英文字母不分大小寫
 //   - 辨識偶爾讀錯一兩個字（例如「庾」讀成「庚」），或是 Excel 本身的字跟遊戲不同 → 用編輯距離算相似度
 //   - 辨識最常見的錯是「漏字」（筆畫密的字，例如「沙格鎮」讀成「沙格」）→ 讀到的比 Excel 短時，改用共同字數算
+//   - 但讀到的字被好幾個名稱完整包含時（「玫瑰鳳蝶」漏讀成「鳳蝶」，「黑鳳蝶」「玫瑰鳳蝶」「天狗鳳蝶」都包含它），
+//     字數最接近的分數最高，卻不一定是答案 → 標成不確定，交給同一頁推斷或使用者
 //   - 固定會讀錯的字（「鑽」每次都讀成「巑」）→ 對照表（設定檔的 OcrConfusions）：
 //     照原樣比一次、換字後再比一次，取比較像的，所以原本就有這個字的名稱不受影響
 // 只在同一個分類裡找（不同分類有同名的發現物，例如「渾天儀」「犀牛」）。
@@ -262,7 +264,9 @@ public sealed class NameMatcher
         }
 
         List<DiscoveryItem>? best = null;
+        string bestKey = "";
         double bestScore = 0, second = 0;
+        int containing = 0; // 有幾個名稱完整包含讀到的字（讀到的是漏了字的）
         foreach ((string k, List<DiscoveryItem> items) in list)
         {
             if (k == key)
@@ -270,11 +274,16 @@ public sealed class NameMatcher
                 return Result(items, 1, false); // 完全一樣，不用再比
             }
             double s = Similarity(key, k);
+            if (key.Length < k.Length && CommonSubsequence(key, k) == key.Length)
+            {
+                containing++;
+            }
             if (s > bestScore)
             {
                 second = bestScore;
                 bestScore = s;
                 best = items;
+                bestKey = k;
             }
             else if (s > second)
             {
@@ -285,7 +294,21 @@ public sealed class NameMatcher
         {
             return MatchResult.None(bestScore);
         }
-        return Result(best, bestScore, bestScore - second < MinLead);
+        bool ambiguous = bestScore - second < MinLead
+                         // 第一名是「完整包含讀到的字」，而且還有別的名稱也完整包含：漏的是哪幾個字分不出來
+                         || (containing >= 2 && key.Length < bestKey.Length && CommonSubsequence(key, bestKey) == key.Length);
+        return Result(best, bestScore, ambiguous);
+    }
+
+    /// <summary>
+    /// 讀到的字（read）是不是被名稱（name）完整包含、只是少了字（依序都在，例如「鳳蝶」之於「玫瑰鳳蝶」）。
+    /// 比較時名稱拿掉結尾數字（同名組）。
+    /// </summary>
+    public static bool IsContainedIn(string read, string name)
+    {
+        string r = Normalize(read);
+        string n = StripNumber(Normalize(name));
+        return r != "" && r.Length < n.Length && CommonSubsequence(r, n) == r.Length;
     }
 
     private static MatchResult Result(List<DiscoveryItem> items, double score, bool ambiguous)

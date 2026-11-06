@@ -977,6 +977,13 @@ public sealed class MainForm : Form
                 {
                     continue;
                 }
+                // 讀到的字被剩下的好幾個名稱完整包含（「鳳蝶」之於「黑鳳蝶」「玫瑰鳳蝶」）：漏的是哪幾個字分不出來，不推斷
+                string read = candidates[0].Text;
+                if (candidates.Count > 1 && NameMatcher.IsContainedIn(read, candidates[0].Items[0].Name)
+                    && candidates.Skip(1).Any(c => NameMatcher.IsContainedIn(read, c.Items[0].Name)))
+                {
+                    continue;
+                }
                 (IReadOnlyList<DiscoveryItem> best, double bestScore, string bestText) = candidates[0];
                 picks[i] = (row, bestText, new MatchResult(best[0], bestScore, false, best.Count > 1 ? best : []));
                 changed = true;
