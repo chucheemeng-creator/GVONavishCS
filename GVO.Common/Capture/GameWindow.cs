@@ -7,6 +7,7 @@
 // 「遊戲原本的像素」× Scale ＝ 螢幕像素。
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -33,6 +34,54 @@ public sealed class GameWindow
         }
         WindowHandle = FindWindow(WindowClassName, null);
         return WindowHandle != IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// 指定要用哪一個遊戲視窗（遊戲可以多開時，由呼叫端決定讀哪一個）。
+    /// 之後 TryGetClientArea、截圖都針對這個視窗；它關掉時，FindGameWindow 會改找最前面的遊戲視窗。
+    /// </summary>
+    public void SetTarget(IntPtr hwnd)
+    {
+        WindowHandle = hwnd;
+    }
+
+    /// <summary>
+    /// 找出所有看得到的遊戲視窗，由最前面排到最後面（Windows 的視窗前後順序）。
+    /// 遊戲可以多開，FindGameWindow 只會找到其中一個；需要分辨的話用這個。
+    /// </summary>
+    public static List<IntPtr> FindAllGameWindows(string className = DefaultWindowClassName)
+    {
+        List<IntPtr> result = [];
+        // EnumWindows 依前後順序列出所有最上層視窗，第一個就是最前面的
+        EnumWindows((hwnd, _) =>
+        {
+            if (IsWindowVisible(hwnd) && GetClassName(hwnd) == className)
+            {
+                result.Add(hwnd);
+            }
+            return true; // 繼續列舉
+        }, IntPtr.Zero);
+        return result;
+    }
+
+    /// <summary>這個視窗是不是遊戲視窗（比對類別名稱）。</summary>
+    public static bool IsGameWindow(IntPtr hwnd, string className = DefaultWindowClassName)
+        => hwnd != IntPtr.Zero && GetClassName(hwnd) == className;
+
+    /// <summary>視窗是否縮到最小（縮到最小時畫面上沒有東西可截）。</summary>
+    public static bool IsMinimized(IntPtr hwnd) => IsIconic(hwnd);
+
+    /// <summary>螢幕上這個點（螢幕實際像素）最上面的是哪一個最上層視窗；沒有時回傳 IntPtr.Zero。</summary>
+    public static IntPtr TopLevelWindowAt(Point screen)
+    {
+        IntPtr hwnd = WindowFromPoint(new POINT { X = screen.X, Y = screen.Y });
+        return hwnd == IntPtr.Zero ? IntPtr.Zero : GetAncestor(hwnd, GA_ROOT);
+    }
+
+    private static string GetClassName(IntPtr hwnd)
+    {
+        StringBuilder sb = new(256);
+        return GetClassName(hwnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
     }
 
     /// <summary>取得遊戲視窗目前的標題（顯示用）。</summary>
@@ -262,6 +311,27 @@ public sealed class GameWindow
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT point);
+
+    private const uint GA_ROOT = 2;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
