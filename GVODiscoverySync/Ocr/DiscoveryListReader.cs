@@ -303,7 +303,7 @@ public sealed class DiscoveryListReader
         List<ListRow> rows = [];
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
-            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts, Width(row)));
+            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, Layout.RowHeight, scale), texts, Width(row)));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -477,11 +477,20 @@ public sealed class DiscoveryListReader
         return sb.ToString().Replace(" ", "");
     }
 
-    // 卡片圖示是橘色的：那一列的圖示位置有幾個橘色的點，就當成有圖示
-    private bool HasCardIcon(Bitmap client, Rectangle iconRect, int row, double scale)
+    /// <summary>
+    /// 清單第 row 列的前面有沒有卡片圖示（client 是整個遊戲畫面的截圖）。給測試用，讀取時用下面的版本。
+    /// </summary>
+    public static bool HasCardIcon(Bitmap client, ListLayout layout, int row, double scale)
+        => HasCardIcon(client, ToScreen(layout.IconX, layout.ListY, layout.IconWidth, layout.ListHeight, client.Size, scale),
+            row, layout.RowHeight, scale);
+
+    // 卡片圖示（紅褐色、米色的小卷軸）：清單的底色是深藍色（選取的那一列是藍綠色），
+    // 紅色明顯比藍色多的點（暖色）有一定數量就當成有圖示。
+    // 以前只認「亮橘色」，實際的圖示顏色是 (155,54,20)、(218,194,182) 這類，一個點都對不上，卡片欄一直是空的
+    private static bool HasCardIcon(Bitmap client, Rectangle iconRect, int row, int rowHeight, double scale)
     {
-        int rowTop = iconRect.Y + (int)Math.Round(row * Layout.RowHeight * scale);
-        Rectangle r = Rectangle.Intersect(new Rectangle(iconRect.X, rowTop, iconRect.Width, (int)Math.Round(Layout.RowHeight * scale)),
+        int rowTop = iconRect.Y + (int)Math.Round(row * rowHeight * scale);
+        Rectangle r = Rectangle.Intersect(new Rectangle(iconRect.X, rowTop, iconRect.Width, (int)Math.Round(rowHeight * scale)),
             new Rectangle(Point.Empty, client.Size));
         if (r.Width <= 0 || r.Height <= 0)
         {
@@ -494,14 +503,15 @@ public sealed class DiscoveryListReader
             for (int x = 0; x < r.Width; x++)
             {
                 int o = y * stride + x * 4;
-                byte b = bytes[o], g = bytes[o + 1], red = bytes[o + 2];
-                if (red > 180 && g > 80 && g < 170 && b < 110)
+                int b = bytes[o], red = bytes[o + 2];
+                if (red >= 100 && red >= b + 60)
                 {
                     count++;
                 }
             }
         }
-        return count >= 3;
+        // 實測：有圖示的一格（8×20 遊戲像素）有 43 個點，沒有圖示的是 0；放大時點數跟著面積變多
+        return count >= 10 * scale * scale;
     }
 
     public Rectangle TitleRect(Size client, double scale)
