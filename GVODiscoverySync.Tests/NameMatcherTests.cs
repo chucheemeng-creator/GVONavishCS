@@ -115,6 +115,16 @@ public class NameMatcherTests
     }
 
     [Fact]
+    public void 完全一樣但字數對不上時也試錯字對照表()
+    {
+        // 「聖像」完全一樣，但畫面上是三個字寬：照原樣是不確定；換字後字數改變、對到字數正確的那一個
+        NameMatcher matcher = new(TestBook.Book, new Dictionary<string, string> { ["聖像"] = "三聖像" });
+        MatchResult m = matcher.Match("美術品", "聖像", TestBook.GameWidth("三聖像"));
+        Assert.True(m.IsMatch);
+        Assert.Equal("三聖像", m.Item!.Name);
+    }
+
+    [Fact]
     public void 錯字對照表可以換()
     {
         NameMatcher matcher = new(TestBook.Book); // 沒有錯字對照表

@@ -277,6 +277,32 @@ public class SessionTests
     }
 
     [Fact]
+    public void 依價值排列時兩隻同名都先填錯位置_之後換得過來()
+    {
+        // 聖母加冠1 功績 150、聖母加冠2 功績 40，依價值排列時分散在不同頁
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByValue("美術品", keep: "聖母加冠");
+        int i1 = order.FindIndex(i => i.Name == "聖母加冠1");
+        int i2 = order.FindIndex(i => i.Name == "聖母加冠2");
+        session.AddPage("美術品", Page(order, 0)); // 先記住「依價值排列」
+
+        // 甲（其實是聖母加冠2）在頁面第一列，只有下一列：兩個的功績都符合，依序填進「聖母加冠1」（填錯了）
+        session.AddPage("美術品", Page(order, i2));
+        // 乙（其實是聖母加冠1）在頁面最後一列，只有上一列：兩個都符合，填進剩下的「聖母加冠2」（也填錯了）
+        session.AddPage("美術品", Page(order, i1 - 9));
+        Assert.All(session.All.Where(f => f.Match.IsVariant), f => Assert.True(f.VariantUnsure));
+
+        // 乙上下都看到了：功績判斷是聖母加冠1，和甲交換位置
+        session.AddPage("美術品", Page(order, i1 - 5));
+        Found one = MatchedOf(session, "聖母加冠1");
+        Found two = MatchedOf(session, "聖母加冠2");
+        Assert.False(one.VariantUnsure); // 乙：確定
+        Assert.True(two.VariantUnsure); // 甲：還沒上下都看到，仍然請確認
+        Assert.NotSame(one, two);
+        Assert.Equal(2, session.All.Count(f => f.Match.IsVariant));
+    }
+
+    [Fact]
     public void 同名的列移除後不會再加回來()
     {
         DiscoverySession session = NewSession();

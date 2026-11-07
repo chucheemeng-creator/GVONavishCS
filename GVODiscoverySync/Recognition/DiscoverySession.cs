@@ -511,6 +511,10 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             }
             return false;
         }
+        // 同一個身分之前用「同名，請確認」先記下的那一筆：就是這一列，等一下改成功績判斷出來的那一個。
+        // 只找同一個身分的；沒有身分的那一筆可能是另一列，不能拿來改（改錯會把另一隻變成已確定並預設寫入）
+        Found? unsure = occurrence is null ? null
+            : _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Occurrence == occurrence);
         if (_matched.TryGetValue(item, out Found? existing))
         {
             // 這個發現物已經在清單上。同名組的列一開始是依序填空位，那一筆不一定就是這一列，要先看身分：
@@ -530,11 +534,17 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 return false; // 手動指定的、已經確定的：不動
             }
             // 那一筆是別的列（或還沒有身分），只是先佔了這個位置：把它移到組裡還空著的位置（仍然「請確認」），
-            // 這個發現物留給這一列。組裡沒有空位時那一筆不動（這一列就不另外加）
-            DiscoveryItem? free = match.Variants.FirstOrDefault(v => !_matched.ContainsKey(v));
+            // 這個發現物留給這一列。空位也可以是這一列自己（unsure）正要讓出來的位置——
+            // 兩隻都先填錯位置時（甲佔了乙的、乙佔了甲的），這樣才換得過來。組裡沒有空位時那一筆不動
+            DiscoveryItem? free = match.Variants.FirstOrDefault(v => !_matched.ContainsKey(v))
+                                  ?? (unsure?.Item is DiscoveryItem own && match.Variants.Contains(own) ? own : null);
             if (free is null)
             {
                 return false;
+            }
+            if (unsure is not null)
+            {
+                DetachFound(unsure); // 先讓出這一列原本佔的位置（下面會改成 item）
             }
             DetachFound(existing);
             existing.Assigned = free;
@@ -542,10 +552,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             Updated?.Invoke(existing, true);
             // 往下走：為這一列新增一筆確定的
         }
-        // 同一個身分之前用「同名，請確認」先記下的那一筆：就是這一列，改成功績判斷出來的那一個。
-        // 只改同一個身分的；沒有身分的那一筆可能是另一列，不能拿來改（改錯會把另一隻變成已確定並預設寫入）
-        Found? unsure = occurrence is null ? null
-            : _matched.Values.FirstOrDefault(f => f.VariantUnsure && !f.Manual && f.Occurrence == occurrence);
+        // 同一個身分之前先記下的那一筆（上面找到的 unsure）：就是這一列，改成功績判斷出來的那一個
         if (unsure is not null)
         {
             DetachFound(unsure);

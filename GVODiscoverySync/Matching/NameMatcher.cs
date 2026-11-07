@@ -179,7 +179,9 @@ public sealed class NameMatcher
     public MatchResult Match(string category, string text, double width = 0)
     {
         MatchResult plain = MatchRaw(category, text, width);
-        if (_confusions.Count == 0 || plain.Score >= 1)
+        // 照原樣就確定對到、而且完全一樣才不用換字再比。完全一樣但字數對不上（不確定）時還是要試：
+        // 換字可能讓字數改變（「冫每」→「海」），對到字數正確的那一個
+        if (_confusions.Count == 0 || (plain.IsMatch && plain.Score >= 1))
         {
             return plain;
         }
