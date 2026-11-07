@@ -639,7 +639,6 @@ public sealed class MainForm : Form
         }
     }
 
-
     // 這一輪失敗（分類判斷不出來、發生例外）：同一個畫面再給 2 次機會，不要記成已處理
     // （不設上限的話，停在別的畫面時會每 0.4 秒辨識一次）
     private void AllowRetry()
@@ -655,7 +654,6 @@ public sealed class MainForm : Form
         }
     }
 
-
     // 第一個倍率讀到的清單是不是每一列都和 Excel 的名稱完全一樣（而且字數對得上）：是的話不用再換倍率讀。
     // 只看「完全一樣」，不看模糊比對的結果：模糊對到的，換個倍率可能讀得更完整，還是要讀
     private bool AllExact(string title, IReadOnlyList<(string Text, double Width)> rows)
@@ -669,9 +667,7 @@ public sealed class MainForm : Form
     }
 
 
-
     }
-
 
     // ── 手動指定、移除 ──
 
