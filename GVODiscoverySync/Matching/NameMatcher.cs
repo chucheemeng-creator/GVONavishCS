@@ -173,7 +173,8 @@ public sealed class NameMatcher
 
     /// <summary>
     /// 在分類 category 裡找名稱 text 對應的發現物（照原樣、套用錯字對照表各比一次，取比較好的）。
-    /// width 是畫面上量到的字寬（遊戲像素，0 表示沒量到）：字數對不上的名稱不列入比對（讀到的字完全一樣時除外）。
+    /// width 是畫面上量到的字寬（遊戲像素，0 表示沒量到）：字數對不上的名稱不列入比對；
+    /// 讀到的字完全一樣、字數卻對不上時，標成不確定。
     /// </summary>
     public MatchResult Match(string category, string text, double width = 0)
     {
@@ -220,7 +221,7 @@ public sealed class NameMatcher
         }
         foreach ((string k, List<DiscoveryItem> items) in list)
         {
-            if (k != key && k != fixedKey && !FitsWidth(items, width))
+            if (!FitsWidth(items, width)) // 完全一樣但字數對不上的也不算（同 MatchRaw）
             {
                 continue;
             }
@@ -287,7 +288,8 @@ public sealed class NameMatcher
         {
             if (k == key)
             {
-                return Result(items, 1, false); // 完全一樣，不用再比
+                // 完全一樣，不用再比。但字數對不上時，多半是漏了字、剛好變成另一個名稱（「三聖像」漏讀成「聖像」），標成不確定
+                return Result(items, 1, !FitsWidth(items, width));
             }
             if (!FitsWidth(items, width))
             {

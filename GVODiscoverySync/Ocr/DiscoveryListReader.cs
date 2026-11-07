@@ -202,8 +202,11 @@ public sealed class DiscoveryListReader
     /// <summary>
     /// 辨識分類標題和清單。acceptTitle 判斷讀到的標題能不能用（例如是不是 Excel 裡的分類）；
     /// 不能用時換別的放大倍率再讀一次標題。
+    /// allConfident 判斷第一個倍率讀到的清單是不是每一列都確定對到了（參數是標題、每一列讀到的字和量到的字寬）；
+    /// 是的話就不用再換倍率讀，省下兩次文字辨識。null 時一律用全部的倍率讀（除錯輸出用，看得到每種倍率的結果）。
     /// </summary>
-    public async Task<ListSnapshot> ReadAsync(Bitmap client, double scale, Func<string, bool>? acceptTitle = null)
+    public async Task<ListSnapshot> ReadAsync(Bitmap client, double scale, Func<string, bool>? acceptTitle = null,
+        Func<string, IReadOnlyList<(string Text, double Width)>, bool>? allConfident = null)
     {
         Rectangle titleRect = TitleRect(client.Size, scale);
         Rectangle listRect = ListRect(client.Size, scale);
@@ -233,6 +236,17 @@ public sealed class DiscoveryListReader
         // 清單用幾種放大倍率各讀一次（OcrScale、少 0.5、多 0.5），每一列收集所有讀到的結果
         double[] listScales = [OcrScale, OcrScale - 0.5, OcrScale + 0.5];
         Dictionary<int, List<string>> readings = [];
+        Dictionary<int, double> widths = []; // 每一列量到的字寬（量過的記下來，不重複量）
+        double Width(int row)
+        {
+            if (!widths.TryGetValue(row, out double w))
+            {
+                w = MeasureTextWidth(client, RowRect(listRect, row, scale), scale);
+                widths[row] = w;
+            }
+            return w;
+        }
+        bool first = true;
         foreach (double s in listScales.Where(x => x >= 1.5).Distinct())
         {
             Dictionary<int, string> pass = await ReadListAsync(client, listRect, scale, s);
@@ -248,6 +262,13 @@ public sealed class DiscoveryListReader
                     list.Add(text);
                 }
             }
+            // 第一個倍率就每一列都確定對到了：不用再換倍率讀
+            if (first && allConfident is not null && readings.Count > 0 && NoMissingRows(client, listRect, scale, readings)
+                && allConfident(title, [.. readings.OrderBy(p => p.Key).Select(p => (p.Value[0], Width(p.Key)))]))
+            {
+                break;
+            }
+            first = false;
         }
 
         // 有字但整列都沒讀到的（短名稱常常這樣）：單獨把這一列裁出來，換幾種倍率再讀
@@ -282,8 +303,7 @@ public sealed class DiscoveryListReader
         List<ListRow> rows = [];
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
-            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts,
-                MeasureTextWidth(client, RowRect(listRect, row, scale), scale)));
+            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts, Width(row)));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -366,6 +386,19 @@ public sealed class DiscoveryListReader
             }
         }
         return count >= 25 * scale * scale;
+    }
+
+    // 有字的列是不是都讀到了（有字卻沒讀到的列，要換倍率或單獨裁出來再讀）
+    private bool NoMissingRows(Bitmap client, Rectangle listRect, double scale, Dictionary<int, List<string>> readings)
+    {
+        for (int row = 0; row < Layout.RowCount; row++)
+        {
+            if (!readings.ContainsKey(row) && HasText(client, RowRect(listRect, row, scale), scale))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>

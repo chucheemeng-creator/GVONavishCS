@@ -669,7 +669,7 @@ public sealed class MainForm : Form
         }
 
         NameMatcher matcher = _matcher;
-        ListSnapshot snapshot = await _reader.ReadAsync(client, scale, t => matcher.MatchCategory(t) is not null);
+        ListSnapshot snapshot = await _reader.ReadAsync(client, scale, t => matcher.MatchCategory(t) is not null, AllExact);
         if (_closing || IsDisposed)
         {
             return; // 辨識的時候視窗關掉了
@@ -911,6 +911,18 @@ public sealed class MainForm : Form
         _unmatched[key] = found;
         AddView(found);
         return true;
+    }
+
+    // 第一個倍率讀到的清單是不是每一列都和 Excel 的名稱完全一樣（而且字數對得上）：是的話不用再換倍率讀。
+    // 只看「完全一樣」，不看模糊比對的結果：模糊對到的，換個倍率可能讀得更完整，還是要讀
+    private bool AllExact(string title, IReadOnlyList<(string Text, double Width)> rows)
+    {
+        if (_matcher is not NameMatcher matcher)
+        {
+            return false;
+        }
+        string? category = matcher.MatchCategory(title) ?? matcher.GuessCategory([.. rows.Select(r => r.Text)]);
+        return category is not null && rows.All(r => matcher.Match(category, r.Text, r.Width) is { IsMatch: true, Score: >= 1 });
     }
 
     // 同一列用不同倍率讀到好幾種結果時，挑對得上而且最像的那個
