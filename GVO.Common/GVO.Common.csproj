@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <!-- 共用類別庫的版本號，和 GVONavish、發現物同步工具各自的版本號分開 -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <TargetFramework>net10.0-windows</TargetFramework>
     <!-- Bitmap、Graphics.CopyFromScreen、Icon 在 Windows Desktop 執行環境裡 -->
     <UseWindowsForms>true</UseWindowsForms>

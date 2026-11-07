@@ -29,8 +29,10 @@ namespace GVODiscoverySync.Ocr;
 /// 清單上的一列。Index 是畫面上的第幾列（0 起算）。
 /// Readings 是用不同放大倍率讀到的結果（同一列換個倍率常常就讀對了，由呼叫端挑最像的）；Text 是第一個。
 /// 這一列有字、但怎麼讀都讀不出來時（常見於一、兩個字的短名稱，例如「蠶」），Readings 是空的、Text 是 ""。
+/// TextWidth 是這一列的字從畫面上量到的寬度（遊戲原本的像素，0 表示沒量到）。
+/// 清單的字型每個中文字一樣寬，所以就算辨識漏了字，也看得出名稱原本有幾個字。
 /// </summary>
-public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings);
+public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings, double TextWidth);
 
 /// <summary>一次辨識的結果。</summary>
 public sealed class ListSnapshot
@@ -145,8 +147,15 @@ public sealed class DiscoveryListReader
     /// </summary>
     public byte[] TextMask(Bitmap client, double scale)
     {
-        List<byte> mask = [];
+        // 每 400ms 跑一次（150% 縮放時約 12 萬個點）：先算好總數，配置一次陣列，不用 List 一直擴充
         Rectangle[] rects = [TitleRect(client.Size, scale), ListRect(client.Size, scale)];
+        int length = 0;
+        foreach (Rectangle r in rects)
+        {
+            length += Math.Max(0, r.Width) * Math.Max(0, r.Height);
+        }
+        byte[] mask = new byte[length];
+        int pos = 0;
         foreach (Rectangle r in rects)
         {
             if (r.Width <= 0 || r.Height <= 0)
@@ -156,15 +165,16 @@ public sealed class DiscoveryListReader
             byte[] bytes = GetPixelBytes(client, r, out int stride);
             for (int y = 0; y < r.Height; y++)
             {
+                int rowOffset = y * stride;
                 for (int x = 0; x < r.Width; x++)
                 {
-                    int o = y * stride + x * 4;
+                    int o = rowOffset + x * 4;
                     int m = Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2]));
-                    mask.Add(m >= TextThreshold ? (byte)1 : (byte)0);
+                    mask[pos++] = m >= TextThreshold ? (byte)1 : (byte)0;
                 }
             }
         }
-        return [.. mask];
+        return mask;
     }
 
     /// <summary>
@@ -192,8 +202,11 @@ public sealed class DiscoveryListReader
     /// <summary>
     /// 辨識分類標題和清單。acceptTitle 判斷讀到的標題能不能用（例如是不是 Excel 裡的分類）；
     /// 不能用時換別的放大倍率再讀一次標題。
+    /// allConfident 判斷第一個倍率讀到的清單是不是每一列都確定對到了（參數是標題、每一列讀到的字和量到的字寬）；
+    /// 是的話就不用再換倍率讀，省下兩次文字辨識。null 時一律用全部的倍率讀（除錯輸出用，看得到每種倍率的結果）。
     /// </summary>
-    public async Task<ListSnapshot> ReadAsync(Bitmap client, double scale, Func<string, bool>? acceptTitle = null)
+    public async Task<ListSnapshot> ReadAsync(Bitmap client, double scale, Func<string, bool>? acceptTitle = null,
+        Func<string, IReadOnlyList<(string Text, double Width)>, bool>? allConfident = null)
     {
         Rectangle titleRect = TitleRect(client.Size, scale);
         Rectangle listRect = ListRect(client.Size, scale);
@@ -223,6 +236,17 @@ public sealed class DiscoveryListReader
         // 清單用幾種放大倍率各讀一次（OcrScale、少 0.5、多 0.5），每一列收集所有讀到的結果
         double[] listScales = [OcrScale, OcrScale - 0.5, OcrScale + 0.5];
         Dictionary<int, List<string>> readings = [];
+        Dictionary<int, double> widths = []; // 每一列量到的字寬（量過的記下來，不重複量）
+        double Width(int row)
+        {
+            if (!widths.TryGetValue(row, out double w))
+            {
+                w = MeasureTextWidth(client, RowRect(listRect, row, scale), scale);
+                widths[row] = w;
+            }
+            return w;
+        }
+        bool first = true;
         foreach (double s in listScales.Where(x => x >= 1.5).Distinct())
         {
             Dictionary<int, string> pass = await ReadListAsync(client, listRect, scale, s);
@@ -238,6 +262,13 @@ public sealed class DiscoveryListReader
                     list.Add(text);
                 }
             }
+            // 第一個倍率就每一列都確定對到了：不用再換倍率讀
+            if (first && allConfident is not null && readings.Count > 0 && NoMissingRows(client, listRect, scale, readings)
+                && allConfident(title, [.. readings.OrderBy(p => p.Key).Select(p => (p.Value[0], Width(p.Key)))]))
+            {
+                break;
+            }
+            first = false;
         }
 
         // 有字但整列都沒讀到的（短名稱常常這樣）：單獨把這一列裁出來，換幾種倍率再讀
@@ -272,7 +303,7 @@ public sealed class DiscoveryListReader
         List<ListRow> rows = [];
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
-            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts));
+            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, scale), texts, Width(row)));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -355,6 +386,84 @@ public sealed class DiscoveryListReader
             }
         }
         return count >= 25 * scale * scale;
+    }
+
+    // 有字的列是不是都讀到了（有字卻沒讀到的列，要換倍率或單獨裁出來再讀）
+    private bool NoMissingRows(Bitmap client, Rectangle listRect, double scale, Dictionary<int, List<string>> readings)
+    {
+        for (int row = 0; row < Layout.RowCount; row++)
+        {
+            if (!readings.ContainsKey(row) && HasText(client, RowRect(listRect, row, scale), scale))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 量這一列的字有多寬（遊戲原本的像素，從第一個字的左邊到最後一個字的右邊；量不到時是 0）。
+    /// 用和辨識前處理一樣的方法分出字（比這一列的底色亮一定程度），從最左邊的字往右接，
+    /// 中間空了超過 12 遊戲像素（大約 3/4 個中文字）就當成結束，以免把右邊背景的亮點也算進去。
+    /// </summary>
+    private static double MeasureTextWidth(Bitmap client, Rectangle r, double scale)
+    {
+        r = Rectangle.Intersect(r, new Rectangle(Point.Empty, client.Size));
+        if (r.Width <= 0 || r.Height <= 0)
+        {
+            return 0;
+        }
+        byte[] bytes = GetPixelBytes(client, r, out int stride);
+        int[] histogram = new int[256];
+        for (int y = 0; y < r.Height; y++)
+        {
+            for (int x = 0; x < r.Width; x++)
+            {
+                int o = y * stride + x * 4;
+                histogram[Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2]))]++;
+            }
+        }
+        int half = r.Width * r.Height / 2;
+        int background = 0;
+        for (int sum = 0; background < 255; background++)
+        {
+            sum += histogram[background];
+            if (sum > half)
+            {
+                break;
+            }
+        }
+        int low = background + BackgroundMargin;
+        int threshold = (low + Math.Max(low + 40, High)) / 2; // 前處理後比灰色深的才算字
+
+        bool[] ink = new bool[r.Width];
+        for (int x = 0; x < r.Width; x++)
+        {
+            for (int y = 0; y < r.Height; y++)
+            {
+                int o = y * stride + x * 4;
+                if (Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2])) >= threshold)
+                {
+                    ink[x] = true;
+                    break;
+                }
+            }
+        }
+        int left = Array.IndexOf(ink, true);
+        if (left < 0)
+        {
+            return 0;
+        }
+        int maxGap = (int)Math.Round(12 * scale);
+        int right = left;
+        for (int x = left + 1; x < r.Width && x - right <= maxGap; x++)
+        {
+            if (ink[x])
+            {
+                right = x;
+            }
+        }
+        return (right - left + 1) / scale;
     }
 
     // 中文辨識結果每個字之間有空白，接起來

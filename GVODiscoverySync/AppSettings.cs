@@ -5,7 +5,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Unicode;
 using System.Text.Json.Serialization;
 using GVO.Common.IO;
 using GVODiscoverySync.Ocr;
@@ -27,22 +29,11 @@ public class AppSettings
     public double OcrScale { get; set; } = 3;
 
     /// <summary>
-    /// 文字辨識固定會讀錯的字：讀到的 → 正確的。比對時照原樣、換字後各比一次，取比較像的。
-    /// 發現新的固定錯字時，自己在設定檔加一行就好。
-    /// 內建的（BuiltInConfusions）每次啟動都會補進來，所以更新程式後新加的內建錯字不用手動加；
-    /// 不想用某一組內建的，把它改成對應到自己（例如 "專": "專"）。
+    /// 舊版放在設定檔裡的錯字對照表。現在改放在 GVODiscoverySync.OcrConfusions.json（見 ConfusionTable），
+    /// 這裡只用來把舊的內容搬過去；搬好後設成 null，存檔時就不會再寫出來。
     /// </summary>
-    public Dictionary<string, string> OcrConfusions { get; set; } = new(BuiltInConfusions);
-
-    /// <summary>內建的錯字對照表。</summary>
-    public static readonly Dictionary<string, string> BuiltInConfusions = new()
-    {
-        ["巑"] = "鑽", // 黃鑽、粉鑽、藍鑽、科依諾爾鑽
-        ["專"] = "轉", // 汽轉球 → 專球（漏了偏旁）
-        ["降"] = "隆", // 隆派亞長刀 → 降派亞
-        ["冫每"] = "海", // 「氵」讀成「冫」：海埔姜 → 冫每埔姜、海洋生物化石 → 冫每洋生物化石
-        ["冫少"] = "沙", // 沙漠螞蟻 → 冫少漠螞蟻
-    };
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? OcrConfusions { get; set; }
 
     /// <summary>分類標題和清單在遊戲畫面上的位置。</summary>
     public ListLayout Layout { get; set; } = new();
@@ -56,6 +47,18 @@ public class AppSettings
 
     /// <summary>視窗置頂（F1 切換）。</summary>
     public bool TopMost { get; set; }
+
+    /// <summary>
+    /// 讀寫設定檔的選項：中文直接寫出來（不要變成 \uXXXX，才看得懂、改得了錯字對照表），
+    /// 讀的時候允許 // 註解和結尾多一個逗號（手動編輯時比較不會出錯）。
+    /// </summary>
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 
     [JsonIgnore]
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.json");
@@ -74,12 +77,6 @@ public class AppSettings
         IntervalMs = Math.Clamp(IntervalMs, 100, 5000);
         OcrScale = double.IsFinite(OcrScale) ? Math.Clamp(OcrScale, 1.5, 6) : 3;
         Layout ??= new ListLayout();
-        OcrConfusions ??= [];
-        // 舊的設定檔沒有新版內建的錯字：補進來（使用者自己加的、改過的不動）
-        foreach ((string wrong, string right) in BuiltInConfusions)
-        {
-            OcrConfusions.TryAdd(wrong, right);
-        }
         if (Layout.RowHeight <= 0 || Layout.RowCount <= 0)
         {
             Layout = new ListLayout();
@@ -92,7 +89,7 @@ public class AppSettings
         {
             if (File.Exists(FilePath))
             {
-                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath))
+                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOptions)
                     ?? throw new JsonException("設定檔內容是 null");
                 settings.Normalize();
                 return settings;
@@ -127,8 +124,7 @@ public class AppSettings
         }
         try
         {
-            JsonSerializerOptions options = new() { WriteIndented = true };
-            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, options));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, JsonOptions));
         }
         catch (Exception ex)
         {
