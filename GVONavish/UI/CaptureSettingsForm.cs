@@ -29,8 +29,10 @@ public class CaptureSettingsForm : Form
     public int OffsetY => (int)_numOffsetY.Value;
     public int IntervalMs => (int)_numInterval.Value;
 
-    public CaptureSettingsForm(int offsetX, int offsetY, int intervalMs)
+    /// <param name="targetWindow">多開時要看哪一個遊戲視窗（主視窗正在讀的那個）；IntPtr.Zero 表示看最前面的。</param>
+    public CaptureSettingsForm(int offsetX, int offsetY, int intervalMs, IntPtr targetWindow)
     {
+        _capture.LockTo(targetWindow);
         BuildUi(offsetX, offsetY, intervalMs);
         ApplyOffset();
         _timer.Interval = 300;
@@ -175,6 +177,11 @@ public class CaptureSettingsForm : Form
             return;
         }
         string status = "遊戲視窗：" + _capture.GetWindowTitle();
+        if (_capture.GameWindowCount > 1)
+        {
+            status += _capture.IsLocked ? $"（遊戲 {_capture.GameWindowCount} 開：看主視窗正在讀的那個）"
+                                        : $"（遊戲 {_capture.GameWindowCount} 開：看最前面的）";
+        }
 
         Bitmap? bmp = _capture.Capture();
         if (bmp is null)

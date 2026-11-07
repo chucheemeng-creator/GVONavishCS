@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <!-- 版本號：發佈新版時只要改這裡（關於視窗會自動顯示） -->
-    <Version>0.9.7</Version>
+    <Version>0.9.8</Version>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
