@@ -1,0 +1,43 @@
+// GVODiscoverySync.json：發現物同步的設定檔，放在 GVODiscoverySync.exe 同一個資料夾。
+// 程式關閉時會自動存檔（註解不會保留），手動改的時候請先關閉程式。
+// v0.2.22 起可以寫 // 註解、最後一項後面多一個逗號也沒關係。
+{
+  // 上一次用的 Excel 檔案（\ 要寫成 \\）
+  "ExcelPath": "C:\\Chu2\\GVOexcel\\GVOexcel_SWex13-3931.xlsx",
+
+  // 上一次選的人物：0 = 人物1、1 = 人物2 …… 4 = 人物5
+  "Character": 0,
+
+  // 多久看一次遊戲畫面（毫秒，100～5000）
+  "IntervalMs": 400,
+
+  // 辨識前把畫面放大成遊戲原本像素的幾倍（1.5～6）。3 最穩，4 倍時實測讀不到分類標題
+  "OcrScale": 3,
+
+  // 錯字對照表 v0.2.32 起改放在 GVODiscoverySync.OcrConfusions.json（程式開著也可以改），這裡不用寫
+
+  // 分類標題和清單在遊戲畫面上的位置：遊戲原本的像素，相對於遊戲畫面正中央。
+  // 實測可用：800×600 + 100%、800×600 + 150%、1280×720 + 100%，一般不用改
+  "Layout": {
+    "TitleX": -317,
+    "TitleY": -197,
+    "TitleWidth": 90,
+    "TitleHeight": 22,
+    "ListX": -321,
+    "ListY": -135,
+    "ListWidth": 260,
+    "RowHeight": 20,
+    "RowCount": 10,
+    "IconX": -335,
+    "IconWidth": 8
+  },
+
+  // 視窗位置和大小（WindowWidth 是 0 時用預設值）
+  "WindowX": 0,
+  "WindowY": 0,
+  "WindowWidth": 0,
+  "WindowHeight": 0,
+
+  // 視窗置頂（F1 切換）
+  "TopMost": false
+}

@@ -6,8 +6,15 @@
 // 顯示縮放（例如筆電的 150%）：遊戲不懂顯示縮放，Windows 會把整個遊戲畫面拉大。
 // 這時截圖範圍跟著放大，辨識交給 ScaledCoordReader；截圖位置的設定值一律是「遊戲原本的像素」，
 // 所以預設的 70、273 在任何縮放下都不用改。
+//
+// 遊戲多開（最多 3 開）：
+//   - 還沒鎖定時，讀「最前面的」遊戲視窗；讀到有效座標，就鎖定那個視窗。
+//   - 鎖定後一直讀那個視窗，直到一段時間（UnlockAfterMs）讀不到座標，才解除鎖定、回到讀最前面的。
+//   - 多開的視窗常常疊在同一個位置：鎖定的視窗被另一個遊戲視窗蓋住時，螢幕上那塊顯示的是別的角色的座標，
+//     不能算成鎖定的角色，所以當成讀不到。
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -42,14 +49,50 @@ public sealed class GameWindowCapture : IDisposable
     /// <summary>上一次截圖是放大模式（截圖比 60 × 11 大，要用 ScaledCoordReader 讀）。</summary>
     public bool IsScaled => Scale > 1.01;
 
+    /// <summary>鎖定的視窗連續這麼久（毫秒）讀不到座標，就解除鎖定，改讀最前面的遊戲視窗。</summary>
+    public long UnlockAfterMs { get; set; } = 3000;
+
+    /// <summary>上一次找視窗時，看得到幾個遊戲視窗（多開時 &gt; 1）。</summary>
+    public int GameWindowCount { get; private set; }
+
+    /// <summary>目前鎖定在某一個遊戲視窗上（讀到過座標，而且還沒有一段時間讀不到）。</summary>
+    public bool IsLocked => _lock.IsLocked;
+
+    /// <summary>
+    /// 鎖定的視窗換成另一個（多開時換了角色）。在 CaptureAndRead 回傳新視窗的座標之前觸發，
+    /// 呼叫端可以趁這時重設航向、船速、航線，不要把兩個角色的位置連成一條線。
+    /// </summary>
+    public event EventHandler? TargetChanged;
+
+    private readonly TargetLock _lock = new(); // 多開時讀哪一個視窗的規則
+    private Rectangle _lastCaptureRect; // 上一次截圖的位置（螢幕像素），檢查是不是被其他遊戲視窗蓋住
+
     private Bitmap? _buffer;
     // 放大模式：遊戲原本那塊區域的左上角，在截圖裡的位置（螢幕像素，可以有小數）
     private double _originX, _originY;
     // 放大模式：截圖外圍多截的邊（對齊位置會在 ±0.5 像素內試，取樣範圍要留空間）
     private const int ScaledPadding = 3;
 
-    /// <summary>找遊戲視窗。找不到時回傳 false。</summary>
-    public bool FindGameWindow() => _window.FindGameWindow();
+    /// <summary>
+    /// 決定這次要讀哪一個遊戲視窗：有鎖定就用鎖定的，沒有就用最前面的（縮到最小的跳過）。找不到任何遊戲視窗時回傳 false。
+    /// </summary>
+    public bool FindGameWindow()
+    {
+        List<IntPtr> all = GameWindow.FindAllGameWindows(WindowClassName);
+        GameWindowCount = all.Count;
+        IntPtr target = _lock.Choose(all, GameWindow.IsMinimized);
+        if (target == IntPtr.Zero)
+        {
+            return false;
+        }
+        _window.SetTarget(target);
+        return true;
+    }
+
+    /// <summary>
+    /// 一開始就鎖定指定的視窗（例如讀座標設定視窗要看主視窗正在讀的那一個）。IntPtr.Zero 表示不鎖定。
+    /// </summary>
+    public void LockTo(IntPtr hwnd) => _lock.LockTo(hwnd, Environment.TickCount64);
 
     /// <summary>取得遊戲視窗目前的標題（顯示用）。</summary>
     public string GetWindowTitle() => _window.GetWindowTitle();
@@ -96,6 +139,8 @@ public sealed class GameWindowCapture : IDisposable
             _buffer = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
         }
 
+        _lastCaptureRect = new Rectangle(srcX, srcY, size.Width, size.Height);
+
         // 和原版一樣，從桌面畫面直接複製（遊戲視窗必須是可見的、沒被擋住）；截不到時下一次再試
         return GameWindow.CopyFromScreen(_buffer, srcX, srcY) ? _buffer : null;
     }
@@ -108,19 +153,55 @@ public sealed class GameWindowCapture : IDisposable
     public Bitmap? CaptureRegion(int fromRight, int fromBottom, int width, int height)
         => _window.CaptureRegion(fromRight, fromBottom, width, height);
 
-    /// <summary>截圖並讀座標。成功時回傳座標，失敗回傳 null。</summary>
+    /// <summary>
+    /// 截圖並讀座標，同時管理多開時的鎖定。成功時回傳座標，失敗回傳 null。
+    /// 呼叫前先呼叫 FindGameWindow 決定要讀哪一個視窗。
+    /// </summary>
     public WorldPoint? CaptureAndRead()
     {
+        WorldPoint? p = ReadTarget();
+        // 讀到有效座標就鎖定這個視窗；換成另一個視窗（換了角色）時通知呼叫端
+        if (_lock.OnRead(_window.WindowHandle, p.HasValue, Environment.TickCount64, UnlockAfterMs))
+        {
+            TargetChanged?.Invoke(this, EventArgs.Empty);
+        }
+        return p;
+    }
+
+    private WorldPoint? ReadTarget()
+    {
         Bitmap? bmp = Capture();
-        if (bmp is null)
+        if (bmp is null || IsCoveredByAnotherGameWindow())
         {
             return null;
         }
-        if (TryReadCaptured(bmp, out int x, out int y))
+        return TryReadCaptured(bmp, out int x, out int y) ? new WorldPoint(x, y) : null;
+    }
+
+    /// <summary>
+    /// 截圖的那塊是不是被「另一個」遊戲視窗蓋住（多開時視窗常疊在一起）。
+    /// 只在多開時檢查，而且只認遊戲視窗：被其他程式蓋住時，截到的不是數字，本來就讀不到。
+    /// 檢查左、中、右三個點。
+    /// </summary>
+    private bool IsCoveredByAnotherGameWindow()
+    {
+        if (GameWindowCount < 2)
         {
-            return new WorldPoint(x, y);
+            return false;
         }
-        return null;
+        IntPtr target = _window.WindowHandle;
+        Rectangle r = _lastCaptureRect;
+        int midY = r.Top + r.Height / 2;
+        int[] xs = [r.Left + 1, r.Left + r.Width / 2, r.Right - 2];
+        foreach (int x in xs)
+        {
+            IntPtr top = GameWindow.TopLevelWindowAt(new Point(x, midY));
+            if (top != target && GameWindow.IsGameWindow(top, WindowClassName))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>讀 Capture() 截到的圖（依截圖時是不是放大模式，用對應的方法讀）。</summary>

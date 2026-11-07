@@ -6,7 +6,9 @@
 //   - 全形英數字轉半形、英文字母不分大小寫
 //   - 辨識偶爾讀錯一兩個字（例如「庾」讀成「庚」），或是 Excel 本身的字跟遊戲不同 → 用編輯距離算相似度
 //   - 辨識最常見的錯是「漏字」（筆畫密的字，例如「沙格鎮」讀成「沙格」）→ 讀到的比 Excel 短時，改用共同字數算
-//   - 固定會讀錯的字（「鑽」每次都讀成「巑」）→ 對照表（設定檔的 OcrConfusions）：
+//   - 但讀到的字被好幾個名稱完整包含時（「玫瑰鳳蝶」漏讀成「鳳蝶」，「黑鳳蝶」「玫瑰鳳蝶」「天狗鳳蝶」都包含它），
+//     字數最接近的分數最高，卻不一定是答案 → 標成不確定，交給同一頁推斷或使用者
+//   - 固定會讀錯的字（「鑽」每次都讀成「巑」）→ 對照表（GVODiscoverySync.OcrConfusions.json）：
 //     照原樣比一次、換字後再比一次，取比較像的，所以原本就有這個字的名稱不受影響
 // 只在同一個分類裡找（不同分類有同名的發現物，例如「渾天儀」「犀牛」）。
 //
@@ -51,13 +53,7 @@ public sealed class NameMatcher
 
     public NameMatcher(DiscoveryBook book, IReadOnlyDictionary<string, string>? confusions = null)
     {
-        foreach ((string wrong, string right) in confusions ?? new Dictionary<string, string>())
-        {
-            if (wrong != "" && wrong != right)
-            {
-                _confusions.Add((wrong, right ?? ""));
-            }
-        }
+        SetConfusions(confusions);
 
         foreach ((string category, List<DiscoveryItem> items) in book.Categories)
         {
@@ -162,42 +158,84 @@ public sealed class NameMatcher
         return bestCount >= 1 && bestCount > second && bestCount * 2 >= texts.Count ? best : null;
     }
 
-    /// <summary>在分類 category 裡找名稱 text 對應的發現物（照原樣、套用錯字對照表各比一次，取比較好的）。</summary>
-    public MatchResult Match(string category, string text)
+    /// <summary>
+    /// 換成新的錯字對照表（讀到的 → 正確的）。對應到自己的（不想用某一組內建的）不列入。
+    /// 依「讀到的」由長到短排：「冫每」要比「每」先換（見 ApplyConfusions）。
+    /// </summary>
+    public void SetConfusions(IReadOnlyDictionary<string, string>? confusions)
     {
-        MatchResult plain = MatchRaw(category, text);
-        if (_confusions.Count == 0 || plain.Score >= 1)
+        _confusions.Clear();
+        _confusions.AddRange((confusions ?? new Dictionary<string, string>())
+            .Where(p => !string.IsNullOrEmpty(p.Key) && p.Key != p.Value)
+            .Select(p => (p.Key, p.Value ?? ""))
+            .OrderByDescending(p => p.Key.Length)); // OrderBy 是穩定排序：一樣長的照檔案裡的順序
+    }
+
+    /// <summary>
+    /// 套用錯字對照表：從左到右，每個位置換最長的那一組，換過的字不會再被別組換
+    /// （同時有「冫每→海」「每→梅」時，「冫每」換成「海」，不會先變成「冫梅」；
+    /// 「A→B」「B→C」也不會把 A 連換成 C）。
+    /// </summary>
+    private string ApplyConfusions(string text)
+    {
+        if (_confusions.Count == 0)
+        {
+            return text;
+        }
+        StringBuilder sb = new(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            int at = _confusions.FindIndex(c => string.CompareOrdinal(text, i, c.Wrong, 0, c.Wrong.Length) == 0);
+            if (at >= 0)
+            {
+                sb.Append(_confusions[at].Right);
+                i += _confusions[at].Wrong.Length;
+            }
+            else
+            {
+                sb.Append(text[i]);
+                i++;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 在分類 category 裡找名稱 text 對應的發現物（照原樣、套用錯字對照表各比一次，取比較好的）。
+    /// width 是畫面上量到的字寬（遊戲像素，0 表示沒量到）：字數對不上的名稱不列入比對；
+    /// 讀到的字完全一樣、字數卻對不上時，標成不確定。
+    /// </summary>
+    public MatchResult Match(string category, string text, double width = 0)
+    {
+        MatchResult plain = MatchRaw(category, text, width);
+        // 照原樣就確定對到、而且完全一樣才不用換字再比。完全一樣但字數對不上（不確定）時還是要試：
+        // 換字可能讓字數改變（「冫每」→「海」），對到字數正確的那一個
+        if (_confusions.Count == 0 || (plain.IsMatch && plain.Score >= 1))
         {
             return plain;
         }
-        string fixedText = text;
-        foreach ((string wrong, string right) in _confusions)
-        {
-            fixedText = fixedText.Replace(wrong, right);
-        }
+        string fixedText = ApplyConfusions(text);
         if (fixedText == text)
         {
             return plain;
         }
-        MatchResult corrected = MatchRaw(category, fixedText);
+        MatchResult corrected = MatchRaw(category, fixedText, width);
         return IsBetter(corrected, plain) ? corrected : plain;
     }
 
     /// <summary>
     /// 所有相似度達到 MinScore 的候選（照原樣、套用錯字對照表都算，取比較高的），由高到低排序。
     /// 給「同一頁推斷」用：呼叫端排除不可能的候選後，自己判斷剩下的是不是夠確定。
+    /// width 和 Match 一樣：字數對不上的名稱不列入候選。
     /// </summary>
-    public List<(IReadOnlyList<DiscoveryItem> Items, double Score)> Candidates(string category, string text)
+    public List<(IReadOnlyList<DiscoveryItem> Items, double Score)> Candidates(string category, string text, double width = 0)
     {
         if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
         {
             return [];
         }
-        string fixedText = text;
-        foreach ((string wrong, string right) in _confusions)
-        {
-            fixedText = fixedText.Replace(wrong, right);
-        }
+        string fixedText = ApplyConfusions(text);
         string key = Normalize(text);
         string fixedKey = Normalize(fixedText);
         List<(IReadOnlyList<DiscoveryItem> Items, double Score)> result = [];
@@ -207,6 +245,10 @@ public sealed class NameMatcher
         }
         foreach ((string k, List<DiscoveryItem> items) in list)
         {
+            if (!FitsWidth(items, width)) // 完全一樣但字數對不上的也不算（同 MatchRaw）
+            {
+                continue;
+            }
             double s = Math.Max(k == key ? 1 : Similarity(key, k), fixedKey == key ? 0 : (k == fixedKey ? 1 : Similarity(fixedKey, k)));
             if (s >= MinScore)
             {
@@ -218,25 +260,43 @@ public sealed class NameMatcher
     }
 
     /// <summary>
-    /// 分類裡名稱的字元編碼介於 lower 和 upper 之間（不含）的發現物（同名的一組算一個）。
+    /// 分類裡名稱的字元編碼介於 lower 和 upper 之間（不含）的發現物（同名的一組算一個）。null 表示那一邊沒有限制。
     /// 給「讀不出來的列」推斷用：清單照名稱排序時，這一列一定在上下兩列之間。
     /// </summary>
-    public List<IReadOnlyList<DiscoveryItem>> Between(string category, string lower, string upper)
+    public List<IReadOnlyList<DiscoveryItem>> Between(string category, string? lower, string? upper)
     {
+        lower = lower is null ? null : SortKey(lower);
+        upper = upper is null ? null : SortKey(upper);
         if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
         {
             return [];
         }
         return [.. list
-            .Where(e => string.CompareOrdinal(e.Items[0].Name, lower) > 0 && string.CompareOrdinal(e.Items[0].Name, upper) < 0)
+            .Where(e => lower is null || string.CompareOrdinal(SortKey(e.Items[0].Name), lower) > 0)
+            .Where(e => upper is null || string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
+    }
+
+    /// <summary>
+    /// 比較「照名稱排序」順序用的名稱：拿掉結尾的數字。
+    /// 遊戲上同名的發現物都顯示成「聖母加冠」，Excel 才寫成「聖母加冠1」「聖母加冠2」，
+    /// 用拿掉數字的名稱比較，順序才和遊戲一致。
+    /// </summary>
+    public static string SortKey(string name)
+    {
+        int end = name.Length;
+        while (end > 0 && char.IsAsciiDigit(name[end - 1]))
+        {
+            end--;
+        }
+        return end == 0 ? name : name[..end];
     }
 
     // a 比 b 好：先看是不是確定對到，再看相似度
     private static bool IsBetter(MatchResult a, MatchResult b)
         => a.IsMatch != b.IsMatch ? a.IsMatch : a.Score > b.Score;
 
-    private MatchResult MatchRaw(string category, string text)
+    private MatchResult MatchRaw(string category, string text, double width)
     {
         string key = Normalize(text);
         if (key == "" || !_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
@@ -245,19 +305,31 @@ public sealed class NameMatcher
         }
 
         List<DiscoveryItem>? best = null;
+        string bestKey = "";
         double bestScore = 0, second = 0;
+        int containing = 0; // 有幾個名稱完整包含讀到的字（讀到的是漏了字的）
         foreach ((string k, List<DiscoveryItem> items) in list)
         {
             if (k == key)
             {
-                return Result(items, 1, false); // 完全一樣，不用再比
+                // 完全一樣，不用再比。但字數對不上時，多半是漏了字、剛好變成另一個名稱（「三聖像」漏讀成「聖像」），標成不確定
+                return Result(items, 1, !FitsWidth(items, width));
+            }
+            if (!FitsWidth(items, width))
+            {
+                continue; // 字數對不上（例如讀到「鳳蝶」、畫面上是四個字寬，就不會是「黑鳳蝶」）
             }
             double s = Similarity(key, k);
+            if (key.Length < k.Length && CommonSubsequence(key, k) == key.Length)
+            {
+                containing++;
+            }
             if (s > bestScore)
             {
                 second = bestScore;
                 bestScore = s;
                 best = items;
+                bestKey = k;
             }
             else if (s > second)
             {
@@ -268,7 +340,71 @@ public sealed class NameMatcher
         {
             return MatchResult.None(bestScore);
         }
-        return Result(best, bestScore, bestScore - second < MinLead);
+        bool ambiguous = bestScore - second < MinLead
+                         // 第一名是「完整包含讀到的字」，而且還有別的名稱也完整包含：漏的是哪幾個字分不出來
+                         || (containing >= 2 && key.Length < bestKey.Length && CommonSubsequence(key, bestKey) == key.Length);
+        return Result(best, bestScore, ambiguous);
+    }
+
+    /// <summary>
+    /// 讀到的字（read）是不是被名稱（name）完整包含、只是少了字（依序都在，例如「鳳蝶」之於「玫瑰鳳蝶」）。
+    /// 比較時名稱拿掉結尾數字（同名組）。
+    /// </summary>
+    public static bool IsContainedIn(string read, string name)
+    {
+        string r = Normalize(read);
+        string n = StripNumber(Normalize(name));
+        return r != "" && r.Length < n.Length && CommonSubsequence(r, n) == r.Length;
+    }
+
+    /// <summary>遊戲清單的字型：中文（全形）字每個 16 遊戲像素寬，半形字 8。</summary>
+    public const double FullWidthCharPixels = 16;
+
+    // 量到的寬度和預期的寬度可以差多少（遊戲像素）：比半個中文字小，相差一個字時一定分得出來
+    private const double WidthTolerance = 7;
+
+    /// <summary>
+    /// 名稱的字數和畫面上量到的字寬（width，遊戲像素）對不對得上。width 是 0（沒量到）時都算對得上。
+    /// 同名的一組只要其中一個對得上就算。
+    /// </summary>
+    public static bool FitsWidth(IReadOnlyList<DiscoveryItem> items, double width)
+        => width <= 0 || items.Any(i => FitsWidth(i.Name, width));
+
+    /// <summary>名稱 name 的字數和畫面上量到的字寬（width，遊戲像素）對不對得上。width 是 0（沒量到）時都算對得上。</summary>
+    public static bool FitsWidth(string name, double width)
+    {
+        if (width <= 0)
+        {
+            return true;
+        }
+        // 遊戲上同名的一組不顯示結尾的數字（Excel 才有），有沒有數字兩種都算
+        return Fits(name) || Fits(SortKey(name));
+
+        bool Fits(string n)
+        {
+            (int min, int max) = WidthUnits(n);
+            // 量到的是第一個字的左邊到最後一個字的右邊，比字的間距少大約 2 遊戲像素
+            double half = FullWidthCharPixels / 2;
+            return width >= min * half - 2 - WidthTolerance && width <= max * half - 2 + WidthTolerance;
+        }
+    }
+
+    // 名稱的寬度範圍（半形字的單位，中文字算 2）。
+    // 間隔號不管 Excel 寫成 ·、・、‧ 哪一種，遊戲上都是一個中文字寬（實測「埃努瑪·埃里什」是 7 個字寬），算 2。
+    // 英數字、括號等其他符號，Excel 和遊戲的全形／半形不一定一樣
+    // （Excel 寫「巴別塔（小）」，遊戲上是半形的「巴別塔(小)」），算 1～2。
+    // 希臘字母在遊戲上是全形（實測「天鵝座β」是 4 個字寬），和中文字一樣算 2
+    private static (int Min, int Max) WidthUnits(string name)
+    {
+        int min = 0, max = 0;
+        foreach (char c in name.Trim())
+        {
+            bool unsure = c is not ('·' or '・' or '‧')
+                          && (c < 0x80 || (c >= '\uFF00' && c <= '\uFFEF') || !char.IsLetter(c));
+            min += unsure ? 1 : 2;
+            max += 2;
+        }
+        return (min, max);
     }
 
     private static MatchResult Result(List<DiscoveryItem> items, double score, bool ambiguous)
