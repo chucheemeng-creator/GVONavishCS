@@ -244,10 +244,6 @@ public sealed class NameMatcher
             .Where(e => upper is null || string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
     }
-        return [.. list
-            .Where(e => string.CompareOrdinal(SortKey(e.Items[0].Name), lower) > 0 && string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
-            .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
-    }
 
     /// <summary>
     /// 比較「照名稱排序」順序用的名稱：拿掉結尾的數字。
