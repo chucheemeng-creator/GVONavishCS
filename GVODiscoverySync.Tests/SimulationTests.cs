@@ -26,9 +26,15 @@ public class SimulationTests(ITestOutputHelper output)
         List<string> wrong = [];
         foreach ((string category, List<DiscoveryItem> items) in TestBook.Book.Categories)
         {
+            HashSet<string> done = []; // 同名的一組在遊戲上是同一個名稱，只模擬一次
             foreach (DiscoveryItem item in items)
             {
-                string key = NameMatcher.Normalize(item.Name);
+                // 遊戲上顯示的名稱：同名的一組不顯示 Excel 的結尾數字（水鹿2 → 水鹿）
+                string key = NameMatcher.Normalize(NameMatcher.SortKey(item.Name));
+                if (!done.Add(key))
+                {
+                    continue;
+                }
                 if (key.Length < (mode == "漏兩個字" ? 4 : 3))
                 {
                     continue; // 太短的名稱漏了字就沒剩幾個字，本來就認不出來

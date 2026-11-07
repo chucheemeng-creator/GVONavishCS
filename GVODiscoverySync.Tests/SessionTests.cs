@@ -325,6 +325,60 @@ public class SessionTests
     }
 
     [Fact]
+    public void 同名的列改指定到組外_再移除()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("美術品", keep: "聖母加冠");
+        int at = order.FindIndex(i => NameMatcher.SortKey(i.Name) == "聖母加冠");
+        List<ListRow> page = Page(order, at - 4);
+        session.AddPage("美術品", page);
+        Found one = MatchedOf(session, "聖母加冠1");
+        Found two = MatchedOf(session, "聖母加冠2");
+
+        // 第二列其實是別的發現物：改指定到組外。組裡扣掉一個，剩下的分不出是哪一個，改回請確認
+        DiscoveryItem outside = order[0]; // 不在這一頁上
+        Assert.Null(session.Assign(two, outside));
+        Assert.True(two.VariantSuppressed);
+        Assert.Same(two, session.Matched[outside]);
+        Assert.True(one.VariantUnsure);
+
+        // 再移除同一筆：已經扣過，不會再扣（狀態不變）
+        session.Remove(two);
+        Assert.True(two.VariantSuppressed);
+        Assert.True(one.VariantUnsure);
+        Assert.False(session.Matched.ContainsKey(outside));
+
+        // 再讀同一頁：移除的那一列不加回來，剩下的仍然請確認
+        session.AddPage("美術品", page);
+        Assert.Single(session.All, f => f.Match.IsVariant);
+        Assert.True(one.VariantUnsure);
+    }
+
+    [Fact]
+    public void 同名的列改指定到組外_又改回組內()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("美術品", keep: "聖母加冠");
+        int at = order.FindIndex(i => NameMatcher.SortKey(i.Name) == "聖母加冠");
+        List<ListRow> page = Page(order, at - 4);
+        session.AddPage("美術品", page);
+        Found one = MatchedOf(session, "聖母加冠1");
+        Found two = MatchedOf(session, "聖母加冠2");
+
+        session.Assign(two, order[0]); // 改到組外：扣一個
+        Assert.True(one.VariantUnsure);
+
+        DiscoveryItem back = TestBook.Book.Categories["美術品"].Single(i => i.Name == "聖母加冠2");
+        Assert.Null(session.Assign(two, back)); // 改回組內：扣回來
+        Assert.False(two.VariantSuppressed);
+
+        // 再讀同一頁：兩個又同時看到，整組湊齊，剩下的那一筆確定
+        session.AddPage("美術品", page);
+        Assert.False(one.VariantUnsure);
+        Assert.Equal(2, session.All.Count(f => f.Match.IsVariant));
+    }
+
+    [Fact]
     public void 同名的列移除後不會再加回來()
     {
         DiscoverySession session = NewSession();
