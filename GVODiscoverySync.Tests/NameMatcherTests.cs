@@ -47,6 +47,8 @@ public class NameMatcherTests
     [InlineData("巴別塔（小）", 83, true)] // 結尾的全形右括號，量到的少半格
     [InlineData("浪子（畫家與莎斯姬亞）", 164, true)]
     [InlineData("埃努瑪·埃里什", 112, true)] // 間隔號是一個中文字寬
+    [InlineData("天鵝座β", 59, true)] // β 是全形（實測）
+    [InlineData("天鵝座β", 46, false)]
     [InlineData("黑鳳蝶", 62, false)] // 3 個字，量到 4 個字寬
     [InlineData("玫瑰鳳蝶", 62, true)]
     [InlineData("水鹿2", 30, true)] // 遊戲上不顯示結尾數字
