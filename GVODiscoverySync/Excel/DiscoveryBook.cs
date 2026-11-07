@@ -54,6 +54,25 @@ public sealed class DiscoveryBook
     public int ItemCount => Categories.Values.Sum(l => l.Count);
 
     /// <summary>
+    /// 不經過 Excel，直接用發現物建立（給測試專案用：測試資料是匯出的名稱清單，不用每次打開 Excel）。
+    /// 分類的順序、分類裡的順序和 items 一樣。這樣建立的不能寫入（沒有檔案）。
+    /// </summary>
+    public static DiscoveryBook FromItems(IEnumerable<DiscoveryItem> items)
+    {
+        DiscoveryBook book = new("");
+        foreach (DiscoveryItem item in items)
+        {
+            if (!book.Categories.TryGetValue(item.Category, out List<DiscoveryItem>? list))
+            {
+                list = [];
+                book.Categories[item.Category] = list;
+            }
+            list.Add(item);
+        }
+        return book;
+    }
+
+    /// <summary>
     /// 讀 Excel。Excel 開著這個檔案也可以讀（寫入時才需要關掉）。
     /// 讀不出來時丟出例外（訊息可以直接給使用者看）。
     /// </summary>
