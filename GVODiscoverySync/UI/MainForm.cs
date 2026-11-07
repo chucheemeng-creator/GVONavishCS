@@ -78,6 +78,10 @@ public sealed class MainForm : Form
     }
 
     private readonly AppSettings _settings;
+
+    // 錯字對照表（獨立的檔案，程式開著也可以改，改了自動重新讀）
+    private readonly ConfusionTable _confusions;
+    private readonly string? _confusionProblem;
     private readonly GameWindow _window = new();
     private readonly DiscoveryListReader? _reader;
     private readonly System.Windows.Forms.Timer _timer = new();
@@ -161,6 +165,13 @@ public sealed class MainForm : Form
     public MainForm(AppSettings settings)
     {
         _settings = settings;
+        (_confusions, bool migrated, _confusionProblem) = ConfusionTable.Load(settings.OcrConfusions);
+        if (migrated && settings.OcrConfusions is not null)
+        {
+            // 舊版設定檔裡的錯字對照表已經搬到獨立的檔案：從設定檔拿掉
+            settings.OcrConfusions = null;
+            settings.Save();
+        }
         // 還沒有設定檔時先寫一份預設的（放在程式資料夾），方便直接編輯錯字對照表等設定
         if (!File.Exists(AppSettings.FilePath))
         {
@@ -250,6 +261,14 @@ public sealed class MainForm : Form
         _list.View = View.Details;
         _list.FullRowSelect = true;
         _list.CheckBoxes = true;
+        // 勾選改變時更新「新增」「不確定」的數字（一次加很多列時，最後才一起更新）
+        _list.ItemChecked += (_, _) =>
+        {
+            if (!_batching)
+            {
+                UpdateSummary();
+            }
+        };
         _list.GridLines = false;
         _list.Columns.Add("分類", 80);
         _list.Columns.Add("遊戲畫面上的名稱", 200);
@@ -319,6 +338,11 @@ public sealed class MainForm : Form
         {
             MessageBox.Show(this, _settings.LoadProblem, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+        if (_confusionProblem is not null)
+        {
+            MessageBox.Show(this, _confusionProblem + "\n\n先只用內建的錯字對照表，改好存檔後會自動重新讀取。",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
         if (_reader is null)
         {
             string installed = DiscoveryListReader.InstalledLanguages();
@@ -367,7 +391,7 @@ public sealed class MainForm : Form
             Cursor = Cursors.WaitCursor;
             DiscoveryBook book = DiscoveryBook.Load(path);
             _book = book;
-            _matcher = new NameMatcher(book, _settings.OcrConfusions);
+            _matcher = new NameMatcher(book, _confusions.Map);
             _settings.ExcelPath = path;
             _txtExcel.Text = path;
             FillCharacterNames();
@@ -613,6 +637,13 @@ public sealed class MainForm : Form
         if (_reader is null || _matcher is null)
         {
             return;
+        }
+        // 錯字對照表改過（程式開著時修改、存檔）：換成新的，目前這一頁重新讀一次
+        if (_confusions.ReloadIfChanged() is string confusionMessage)
+        {
+            _matcher.SetConfusions(_confusions.Map);
+            _processedMask = null;
+            SetStatus(confusionMessage);
         }
         byte[] mask = _reader.TextMask(client, scale);
         // 「畫面停了沒、讀過了沒、重試幾次」只給連續讀取用：用截圖檔測試（live＝false）不看也不改，
@@ -1390,7 +1421,7 @@ public sealed class MainForm : Form
         HashSet<DiscoveryItem> onList = [.. _matched.Keys.Where(k => _matched[k] != f),
             .. _unmatched.Values.Where(u => u != f && u.Item is not null && u.View is { Checked: true }).Select(u => u.Item!)];
         DiscoveryItem item;
-        using (ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue))
+        using (ItemPickerForm dlg = new(_book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue, f.Item))
         {
             if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem picked)
             {
@@ -1875,8 +1906,10 @@ public sealed class MainForm : Form
         // 和 UpdateRow 的狀態判斷一致（「不確定」的列在 _unmatched 裡，但 Excel 已經打勾的話狀態是「已經打勾」）
         List<Found> all = [.. _matched.Values, .. _unmatched.Values];
         int already = all.Count(f => f.Item is not null && f.Item.Marked[character]);
-        int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character] && !NeedsConfirm(f));
-        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character] && NeedsConfirm(f));
+        // 新增＝勾選了、會寫入 Excel 的（「不確定」「推斷」的列自己確認後打勾，也算新增）；
+        // 不確定＝需要確認、還沒勾的
+        int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character] && f.View is { Checked: true });
+        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character] && f.View is not { Checked: true } && NeedsConfirm(f));
         int missing = all.Count(f => f.Item is null);
         _lblSummary.Text = $"新增 {newCount}　已經打勾 {already}　不確定 {unsure}　找不到 {missing}";
     }

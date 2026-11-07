@@ -36,6 +36,9 @@ public sealed class ItemPickerForm : Form
     // 讀到這一列時，那一頁是依價值排列：功績範圍才有意義（依名稱排列時功績是亂的）
     private readonly bool _pageByValue;
 
+    // 這一列目前對到（或推斷出來）的發現物：開啟時捲到它、預先選好，確認無誤直接按確定
+    private readonly DiscoveryItem? _current;
+
     private readonly ComboBox _cboCategory = new();
     private readonly TextBox _txtSearch = new();
     private readonly ListView _list = new();
@@ -46,9 +49,11 @@ public sealed class ItemPickerForm : Form
     public DiscoveryItem? SelectedItem { get; private set; }
 
     public ItemPickerForm(DiscoveryBook book, string category, string screenText, int character,
-        IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "", bool pageByValue = false)
+        IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "", bool pageByValue = false,
+        DiscoveryItem? current = null)
     {
         _pageByValue = pageByValue;
+        _current = current;
         _book = book;
         _screenText = screenText;
         _character = character;
@@ -207,6 +212,7 @@ public sealed class ItemPickerForm : Form
         int index = 0;
         int nearest = -1; // 離上一列（沒有的話下一列）最近的候選
         int anchor = aboveIndex >= 0 ? aboveIndex : belowIndex;
+        int currentIndex = -1;
         foreach ((DiscoveryItem item, double score) in ordered)
         {
             bool onList = _onList.Contains(item);
@@ -216,6 +222,10 @@ public sealed class ItemPickerForm : Form
             {
                 nearest = index;
             }
+            if (_current is not null && item == _current)
+            {
+                currentIndex = index;
+            }
             index++;
             // 搜尋時「包含」加了 1 分，顯示時拿掉
             double shown = score > 1 ? score - 1 : score;
@@ -224,7 +234,7 @@ public sealed class ItemPickerForm : Form
                 item.Stars,
                 item.Quest,
                 search == "" && screen == "" ? "" : shown.ToString("0%", CultureInfo.InvariantCulture),
-                onList ? "已在清單上" : item.Marked[_character] ? "已經打勾" : "",
+                onList ? "已在清單上" : item == _current ? "目前的結果" : item.Marked[_character] ? "已經打勾" : "",
             ]) { Tag = item };
             if (onList || item.Marked[_character])
             {
@@ -238,7 +248,16 @@ public sealed class ItemPickerForm : Form
         }
         _list.EndUpdate();
 
-        if (_list.Items.Count > 0)
+        if (currentIndex >= 0 && search == "")
+        {
+            // 這一列目前的結果（例如讀不出來、程式推斷的「爵」）：捲到它並選好，確認無誤直接按確定
+            ListViewItem current = _list.Items[currentIndex];
+            current.Selected = true;
+            current.Focused = true;
+            _list.TopItem = _list.Items[Math.Max(0, currentIndex - 4)];
+            current.EnsureVisible();
+        }
+        else if (_list.Items.Count > 0)
         {
             // Excel 順序（讀不出來的列）時捲到最近的候選附近；沒有候選時捲到上一列的下一個（或下一列的前一個）
             int target = 0;

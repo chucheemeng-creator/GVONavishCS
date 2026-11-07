@@ -8,7 +8,7 @@
 //   - 辨識最常見的錯是「漏字」（筆畫密的字，例如「沙格鎮」讀成「沙格」）→ 讀到的比 Excel 短時，改用共同字數算
 //   - 但讀到的字被好幾個名稱完整包含時（「玫瑰鳳蝶」漏讀成「鳳蝶」，「黑鳳蝶」「玫瑰鳳蝶」「天狗鳳蝶」都包含它），
 //     字數最接近的分數最高，卻不一定是答案 → 標成不確定，交給同一頁推斷或使用者
-//   - 固定會讀錯的字（「鑽」每次都讀成「巑」）→ 對照表（設定檔的 OcrConfusions）：
+//   - 固定會讀錯的字（「鑽」每次都讀成「巑」）→ 對照表（GVODiscoverySync.OcrConfusions.json）：
 //     照原樣比一次、換字後再比一次，取比較像的，所以原本就有這個字的名稱不受影響
 // 只在同一個分類裡找（不同分類有同名的發現物，例如「渾天儀」「犀牛」）。
 //
@@ -53,13 +53,7 @@ public sealed class NameMatcher
 
     public NameMatcher(DiscoveryBook book, IReadOnlyDictionary<string, string>? confusions = null)
     {
-        foreach ((string wrong, string right) in confusions ?? new Dictionary<string, string>())
-        {
-            if (wrong != "" && wrong != right)
-            {
-                _confusions.Add((wrong, right ?? ""));
-            }
-        }
+        SetConfusions(confusions);
 
         foreach ((string category, List<DiscoveryItem> items) in book.Categories)
         {
@@ -162,6 +156,19 @@ public sealed class NameMatcher
             }
         }
         return bestCount >= 1 && bestCount > second && bestCount * 2 >= texts.Count ? best : null;
+    }
+
+    /// <summary>換成新的錯字對照表（讀到的 → 正確的）。對應到自己的（不想用某一組內建的）不列入。</summary>
+    public void SetConfusions(IReadOnlyDictionary<string, string>? confusions)
+    {
+        _confusions.Clear();
+        foreach ((string wrong, string right) in confusions ?? new Dictionary<string, string>())
+        {
+            if (!string.IsNullOrEmpty(wrong) && wrong != right)
+            {
+                _confusions.Add((wrong, right ?? ""));
+            }
+        }
     }
 
     /// <summary>
