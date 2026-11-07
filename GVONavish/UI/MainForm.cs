@@ -283,6 +283,7 @@ public class MainForm : Form
         _miTopMost.Checked = TopMost;
 
         _capture.OffsetFromRightBottom = new Point(_settings.OffsetX, _settings.OffsetY);
+        _capture.TargetChanged += OnCaptureTargetChanged;
 
         _mapView.FollowShip = _settings.FollowShip;
         _miFollow.Checked = _settings.FollowShip;
@@ -522,6 +523,7 @@ public class MainForm : Form
         }
 
         long now = Environment.TickCount64;
+        _capture.UnlockAfterMs = LostMs; // 和「看不到座標」的判斷用同一個時間
         WorldPoint? read = _capture.CaptureAndRead();
         if (read.HasValue)
         {
@@ -529,21 +531,45 @@ public class MainForm : Form
             if (result == CoordFilterResult.Accepted || result == CoordFilterResult.AcceptedJump)
             {
                 OnShipMoved(_filter.Current!.Value, now, result == CoordFilterResult.AcceptedJump);
-                _lblGame.Text = "讀取中";
+                _lblGame.Text = "讀取中" + MultiWindowNote();
             }
             else if (now - _lastReadTime > LostMs)
             {
-                _lblGame.Text = "確認座標中…";
+                _lblGame.Text = "確認座標中…" + MultiWindowNote();
             }
         }
         else if (now - _lastReadTime > LostMs)
         {
             // 不在海上、沒發動「測量」技能、或座標被其他視窗擋住時，畫面上沒有座標
-            _lblGame.Text = "看不到座標（不在海上，或未發動測量，或畫面被擋住）";
+            _lblGame.Text = "看不到座標（不在海上，或未發動測量，或畫面被擋住）" + MultiWindowNote();
         }
 
         UpdateStale(now);
         UpdateTitleAndStatus();
+    }
+
+    /// <summary>遊戲多開時，在狀態列說明目前讀哪一個視窗；只開一個時是空字串。</summary>
+    private string MultiWindowNote()
+    {
+        if (_capture.GameWindowCount < 2)
+        {
+            return "";
+        }
+        return _capture.IsLocked
+            ? $"（遊戲 {_capture.GameWindowCount} 開：鎖定這個角色）"
+            : $"（遊戲 {_capture.GameWindowCount} 開：讀最前面的視窗）";
+    }
+
+    /// <summary>
+    /// 多開時換成讀另一個角色：結束目前的航線，航向、船速、座標過濾都從頭開始，
+    /// 不要把兩個角色的位置連成一條線，也不要把它當成「船瞬間移動」。
+    /// </summary>
+    private void OnCaptureTargetChanged(object? sender, EventArgs e)
+    {
+        _routes.CloseCurrent();
+        _filter.Reset();
+        _speed.Reset();
+        _lastReadTime = 0; // 下一個位置當成第一次讀到，航向從那裡重新推算
     }
 
     /// <summary>一陣子沒讀到座標時，把船速和航向線變灰，表示那是舊的資料。</summary>
@@ -1120,7 +1146,9 @@ public class MainForm : Form
 
     private void ShowCaptureSettings()
     {
-        using CaptureSettingsForm dlg = new(_settings.OffsetX, _settings.OffsetY, _settings.IntervalMs);
+        // 多開時，設定視窗看的是主視窗正在讀的那個遊戲視窗
+        using CaptureSettingsForm dlg = new(_settings.OffsetX, _settings.OffsetY, _settings.IntervalMs,
+            _capture.IsLocked ? _capture.WindowHandle : IntPtr.Zero);
         dlg.TopMost = TopMost;
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
