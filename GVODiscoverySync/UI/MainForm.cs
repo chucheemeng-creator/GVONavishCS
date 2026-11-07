@@ -666,9 +666,6 @@ public sealed class MainForm : Form
         return category is not null && rows.All(r => matcher.Match(category, r.Text, r.Width) is { IsMatch: true, Score: >= 1 });
     }
 
-
-    }
-
     // ── 手動指定、移除 ──
 
     private Found? SelectedFound => _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Found : null;
