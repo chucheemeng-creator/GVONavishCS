@@ -125,6 +125,18 @@ public class NameMatcherTests
     }
 
     [Fact]
+    public void 錯字對照表長的先換_換過的不再連換()
+    {
+        // 「每→梅」寫在前面也一樣：「冫每」先換成「海」，不會變成「冫梅」
+        NameMatcher matcher = new(TestBook.Book, new Dictionary<string, string> { ["每"] = "梅", ["冫每"] = "海" });
+        Assert.Equal("海埔姜", matcher.Match("植物", "冫每埔姜", TestBook.GameWidth("海埔姜")).Item?.Name);
+
+        // 「海→X」不會把剛換出來的「海」再換掉
+        NameMatcher chained = new(TestBook.Book, new Dictionary<string, string> { ["冫每"] = "海", ["海"] = "囗" });
+        Assert.Equal("海埔姜", chained.Match("植物", "冫每埔姜", TestBook.GameWidth("海埔姜")).Item?.Name);
+    }
+
+    [Fact]
     public void 錯字對照表可以換()
     {
         NameMatcher matcher = new(TestBook.Book); // 沒有錯字對照表

@@ -303,6 +303,28 @@ public class SessionTests
     }
 
     [Fact]
+    public void 同名誤讀成兩列_移除假的那一列後剩下的要請確認()
+    {
+        // 其實只發現一個，但這一頁誤讀出兩列「聖母加冠」：看齊了，兩筆都確定
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("美術品", keep: "聖母加冠");
+        int at = order.FindIndex(i => NameMatcher.SortKey(i.Name) == "聖母加冠");
+        List<ListRow> page = Page(order, Math.Max(0, at - 4));
+        session.AddPage("美術品", page);
+        Found one = MatchedOf(session, "聖母加冠1");
+        Assert.False(one.VariantUnsure);
+
+        // 使用者移除假的那一列：剩下的分不出是 1 還是 2，改回請確認
+        session.Remove(MatchedOf(session, "聖母加冠2"));
+        Assert.True(one.VariantUnsure);
+
+        // 再讀到同一頁也不會又變成確定
+        session.AddPage("美術品", page);
+        Assert.True(one.VariantUnsure);
+        Assert.Single(session.All, f => f.Match.IsVariant);
+    }
+
+    [Fact]
     public void 同名的列移除後不會再加回來()
     {
         DiscoverySession session = NewSession();

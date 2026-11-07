@@ -524,6 +524,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 if (!existing.Manual && (existing.VariantUnsure || (hasCard && !existing.HasCard)))
                 {
                     existing.VariantUnsure = false;
+                    existing.ByMerit = true;
                     existing.HasCard |= hasCard;
                     Updated?.Invoke(existing, true);
                 }
@@ -558,6 +559,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             DetachFound(unsure);
             unsure.Assigned = item;
             unsure.VariantUnsure = false;
+            unsure.ByMerit = true;
             unsure.HasCard |= hasCard;
             unsure.Occurrence ??= occurrence;
             _matched[item] = unsure;
@@ -568,6 +570,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         Found found = new()
         {
             Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item, Occurrence = occurrence,
+            ByMerit = true,
         };
         _matched[item] = found;
         Added?.Invoke(found);
@@ -588,12 +591,16 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         // 鄰居認錯時同一隻會被算成兩隻；湊滿就確定的話，多算一隻會讓整組（包括沒發現的那一個）都預設打勾。
         // 實際上很少一直卡在「請確認」：依名稱排列時同名的連在一起，正常捲動一定有一頁同時看到全部；
         // 依價值排列時同名的分散在各頁，但每一隻會由 AddVariantExact 用上下鄰居的功績各自確定。
+        // 記的是讀到的列數（不以整組的數量封頂）：同一頁讀到的比整組還多，表示其中有誤判。
+        // 扣掉使用者移除、改指定到組外的（那些是誤判）之後還湊得齊整組，才算確定——
+        // 否則「誤讀成兩列、移除假的那一列」之後，剩下的那一列會一直被當成看齊了（其實分不出是哪一個）
         _variantSeen.TryGetValue(first, out int before);
-        int together = Math.Max(before, Math.Min(rows.Count, variants.Count));
-        _variantSeen[first] = together;
-        bool complete = together >= variants.Count;
+        int seen = Math.Max(before, rows.Count);
+        _variantSeen[first] = seen;
         _variantSuppressed.TryGetValue(first, out int suppressed);
         _anonymousRemoved.TryGetValue(first, out int anonymousRemoved);
+        int together = Math.Min(seen, variants.Count);
+        bool complete = seen - suppressed >= variants.Count;
 
         // 每一個實際看到的列對應清單上的一筆，不會因為鄰居數出幾個就一次補滿：
         //   - 有身分（上下鄰居）的列：同一個身分已經有一筆就不再加，新的身分就加一筆
@@ -754,6 +761,20 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             f.AnonymousCounted = false;
         }
         f.VariantSuppressed = suppressed;
+
+        // 扣掉之後整組不再算「同一頁看齊」了：靠看齊才確定的其他筆分不出是哪一個，改回「同名，請確認」
+        // （用功績判斷出來的、手動指定的不動）
+        if (suppressed && _variantSeen.GetValueOrDefault(first) - _variantSuppressed.GetValueOrDefault(first) < f.Match.Variants.Count)
+        {
+            foreach (DiscoveryItem v in f.Match.Variants)
+            {
+                if (_matched.TryGetValue(v, out Found? g) && g != f && !g.Manual && !g.ByMerit && !g.VariantUnsure)
+                {
+                    g.VariantUnsure = true;
+                    Updated?.Invoke(g, true);
+                }
+            }
+        }
     }
 
     /// <summary>移除一筆（使用者按「移除這一筆」）：之後再讀到同樣的文字、同一個同名列，不要加回來。</summary>
