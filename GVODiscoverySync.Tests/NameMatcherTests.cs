@@ -47,6 +47,8 @@ public class NameMatcherTests
     [InlineData("巴別塔（小）", 83, true)] // 結尾的全形右括號，量到的少半格
     [InlineData("浪子（畫家與莎斯姬亞）", 164, true)]
     [InlineData("埃努瑪·埃里什", 112, true)] // 間隔號是一個中文字寬
+    [InlineData("天鵝座β", 59, true)] // β 是全形（實測）
+    [InlineData("天鵝座β", 46, false)]
     [InlineData("黑鳳蝶", 62, false)] // 3 個字，量到 4 個字寬
     [InlineData("玫瑰鳳蝶", 62, true)]
     [InlineData("水鹿2", 30, true)] // 遊戲上不顯示結尾數字
@@ -110,6 +112,28 @@ public class NameMatcherTests
         string[] page = ["寺社緣起繪卷", "藥劑師的肖像", "耶穌受雞圖", "俵屋宗達的屏風畫", "浪子(畫家與莎斯姬亞)",
             "阿爾諾芬尼夫婦像", "獨眼巨人像的頭部", "姜希顏的水墨畫", "巴別塔(小)", "巴別塔"];
         Assert.Equal("美術品", TestBook.Matcher.GuessCategory(page));
+    }
+
+    [Fact]
+    public void 完全一樣但字數對不上時也試錯字對照表()
+    {
+        // 「聖像」完全一樣，但畫面上是三個字寬：照原樣是不確定；換字後字數改變、對到字數正確的那一個
+        NameMatcher matcher = new(TestBook.Book, new Dictionary<string, string> { ["聖像"] = "三聖像" });
+        MatchResult m = matcher.Match("美術品", "聖像", TestBook.GameWidth("三聖像"));
+        Assert.True(m.IsMatch);
+        Assert.Equal("三聖像", m.Item!.Name);
+    }
+
+    [Fact]
+    public void 錯字對照表長的先換_換過的不再連換()
+    {
+        // 「每→梅」寫在前面也一樣：「冫每」先換成「海」，不會變成「冫梅」
+        NameMatcher matcher = new(TestBook.Book, new Dictionary<string, string> { ["每"] = "梅", ["冫每"] = "海" });
+        Assert.Equal("海埔姜", matcher.Match("植物", "冫每埔姜", TestBook.GameWidth("海埔姜")).Item?.Name);
+
+        // 「海→X」不會把剛換出來的「海」再換掉
+        NameMatcher chained = new(TestBook.Book, new Dictionary<string, string> { ["冫每"] = "海", ["海"] = "囗" });
+        Assert.Equal("海埔姜", chained.Match("植物", "冫每埔姜", TestBook.GameWidth("海埔姜")).Item?.Name);
     }
 
     [Fact]

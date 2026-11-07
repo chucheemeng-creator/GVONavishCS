@@ -28,6 +28,12 @@ public sealed class Found
     /// <summary>同名的一組還沒全部看到，不確定是組裡的哪一個。</summary>
     public bool VariantUnsure { get; set; }
 
+    /// <summary>
+    /// 同名組的列：是用上下鄰居的功績判斷出是組裡哪一個的（依價值排列時）。
+    /// 這種不靠「同一頁看齊整組」，使用者移除組裡別筆時不用改回請確認。
+    /// </summary>
+    public bool ByMerit { get; set; }
+
     /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
     public bool Unreadable { get; init; }
 

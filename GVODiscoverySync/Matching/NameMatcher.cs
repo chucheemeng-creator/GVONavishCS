@@ -158,17 +158,47 @@ public sealed class NameMatcher
         return bestCount >= 1 && bestCount > second && bestCount * 2 >= texts.Count ? best : null;
     }
 
-    /// <summary>換成新的錯字對照表（讀到的 → 正確的）。對應到自己的（不想用某一組內建的）不列入。</summary>
+    /// <summary>
+    /// 換成新的錯字對照表（讀到的 → 正確的）。對應到自己的（不想用某一組內建的）不列入。
+    /// 依「讀到的」由長到短排：「冫每」要比「每」先換（見 ApplyConfusions）。
+    /// </summary>
     public void SetConfusions(IReadOnlyDictionary<string, string>? confusions)
     {
         _confusions.Clear();
-        foreach ((string wrong, string right) in confusions ?? new Dictionary<string, string>())
+        _confusions.AddRange((confusions ?? new Dictionary<string, string>())
+            .Where(p => !string.IsNullOrEmpty(p.Key) && p.Key != p.Value)
+            .Select(p => (p.Key, p.Value ?? ""))
+            .OrderByDescending(p => p.Key.Length)); // OrderBy 是穩定排序：一樣長的照檔案裡的順序
+    }
+
+    /// <summary>
+    /// 套用錯字對照表：從左到右，每個位置換最長的那一組，換過的字不會再被別組換
+    /// （同時有「冫每→海」「每→梅」時，「冫每」換成「海」，不會先變成「冫梅」；
+    /// 「A→B」「B→C」也不會把 A 連換成 C）。
+    /// </summary>
+    private string ApplyConfusions(string text)
+    {
+        if (_confusions.Count == 0)
         {
-            if (!string.IsNullOrEmpty(wrong) && wrong != right)
+            return text;
+        }
+        StringBuilder sb = new(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            int at = _confusions.FindIndex(c => string.CompareOrdinal(text, i, c.Wrong, 0, c.Wrong.Length) == 0);
+            if (at >= 0)
             {
-                _confusions.Add((wrong, right ?? ""));
+                sb.Append(_confusions[at].Right);
+                i += _confusions[at].Wrong.Length;
+            }
+            else
+            {
+                sb.Append(text[i]);
+                i++;
             }
         }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -179,15 +209,13 @@ public sealed class NameMatcher
     public MatchResult Match(string category, string text, double width = 0)
     {
         MatchResult plain = MatchRaw(category, text, width);
-        if (_confusions.Count == 0 || plain.Score >= 1)
+        // 照原樣就確定對到、而且完全一樣才不用換字再比。完全一樣但字數對不上（不確定）時還是要試：
+        // 換字可能讓字數改變（「冫每」→「海」），對到字數正確的那一個
+        if (_confusions.Count == 0 || (plain.IsMatch && plain.Score >= 1))
         {
             return plain;
         }
-        string fixedText = text;
-        foreach ((string wrong, string right) in _confusions)
-        {
-            fixedText = fixedText.Replace(wrong, right);
-        }
+        string fixedText = ApplyConfusions(text);
         if (fixedText == text)
         {
             return plain;
@@ -207,11 +235,7 @@ public sealed class NameMatcher
         {
             return [];
         }
-        string fixedText = text;
-        foreach ((string wrong, string right) in _confusions)
-        {
-            fixedText = fixedText.Replace(wrong, right);
-        }
+        string fixedText = ApplyConfusions(text);
         string key = Normalize(text);
         string fixedKey = Normalize(fixedText);
         List<(IReadOnlyList<DiscoveryItem> Items, double Score)> result = [];
@@ -368,7 +392,8 @@ public sealed class NameMatcher
     // 名稱的寬度範圍（半形字的單位，中文字算 2）。
     // 間隔號不管 Excel 寫成 ·、・、‧ 哪一種，遊戲上都是一個中文字寬（實測「埃努瑪·埃里什」是 7 個字寬），算 2。
     // 英數字、括號等其他符號，Excel 和遊戲的全形／半形不一定一樣
-    // （Excel 寫「巴別塔（小）」，遊戲上是半形的「巴別塔(小)」），算 1～2
+    // （Excel 寫「巴別塔（小）」，遊戲上是半形的「巴別塔(小)」），算 1～2。
+    // 希臘字母在遊戲上是全形（實測「天鵝座β」是 4 個字寬），和中文字一樣算 2
     private static (int Min, int Max) WidthUnits(string name)
     {
         int min = 0, max = 0;
