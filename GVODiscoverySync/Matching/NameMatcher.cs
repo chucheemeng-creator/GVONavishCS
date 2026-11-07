@@ -355,13 +355,15 @@ public sealed class NameMatcher
         }
     }
 
-    // 名稱的寬度範圍（半形字的單位，中文字算 2）。英數字、間隔號（·・‧）、括號等的寬度沒實測過，算 1～2
+    // 名稱的寬度範圍（半形字的單位，中文字算 2）。
+    // 間隔號不管 Excel 寫成 ·、・、‧ 哪一種，遊戲上都是一個中文字寬（實測「埃努瑪·埃里什」是 7 個字寬），算 2。
+    // 英數字的寬度還沒實測過，算 1～2
     private static (int Min, int Max) WidthUnits(string name)
     {
         int min = 0, max = 0;
         foreach (char c in name.Trim())
         {
-            bool unsure = c < 0x80 || c is '·' or '・' or '‧' or '．' or '（' or '）' or '－' or '　';
+            bool unsure = c < 0x80;
             min += unsure ? 1 : 2;
             max += 2;
         }
