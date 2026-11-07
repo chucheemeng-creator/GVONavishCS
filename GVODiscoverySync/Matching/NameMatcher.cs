@@ -228,17 +228,22 @@ public sealed class NameMatcher
     }
 
     /// <summary>
-    /// 分類裡名稱的字元編碼介於 lower 和 upper 之間（不含）的發現物（同名的一組算一個）。
+    /// 分類裡名稱的字元編碼介於 lower 和 upper 之間（不含）的發現物（同名的一組算一個）。null 表示那一邊沒有限制。
     /// 給「讀不出來的列」推斷用：清單照名稱排序時，這一列一定在上下兩列之間。
     /// </summary>
-    public List<IReadOnlyList<DiscoveryItem>> Between(string category, string lower, string upper)
+    public List<IReadOnlyList<DiscoveryItem>> Between(string category, string? lower, string? upper)
     {
-        lower = SortKey(lower);
-        upper = SortKey(upper);
+        lower = lower is null ? null : SortKey(lower);
+        upper = upper is null ? null : SortKey(upper);
         if (!_byCategory.TryGetValue(category, out List<(string Key, List<DiscoveryItem> Items)>? list))
         {
             return [];
         }
+        return [.. list
+            .Where(e => lower is null || string.CompareOrdinal(SortKey(e.Items[0].Name), lower) > 0)
+            .Where(e => upper is null || string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
+            .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
+    }
         return [.. list
             .Where(e => string.CompareOrdinal(SortKey(e.Items[0].Name), lower) > 0 && string.CompareOrdinal(SortKey(e.Items[0].Name), upper) < 0)
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];

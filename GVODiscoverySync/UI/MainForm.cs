@@ -936,14 +936,15 @@ public sealed class MainForm : Form
                 string? lower = sorted ? anchors.Where(a => a.Index < row.Index).Select(a => a.Name).LastOrDefault() : null;
                 string? upper = sorted ? anchors.Where(a => a.Index > row.Index).Select(a => a.Name).FirstOrDefault() : null;
 
-                // 整列讀不出來：照名稱排序、上下都有確定的列，而且中間只有一個還沒對到的發現物，就是它
+                // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、這一頁已確定的排除候選，只剩一個就是它。
+                // 例如昆蟲類一個字的只有「蠶」；量不到字寬時，要照名稱排序而且上下都有確定的列才推斷
                 if (row.Readings.Count == 0)
                 {
-                    if (lower is not null && upper is not null)
+                    if (row.TextWidth > 0 || (lower is not null && upper is not null))
                     {
                         List<IReadOnlyList<DiscoveryItem>> between = [.. _matcher.Between(category, lower, upper)
                             .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
-                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))]; // 字數也要對得上
+                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))];
                         if (between.Count == 1)
                         {
                             IReadOnlyList<DiscoveryItem> only = between[0];
