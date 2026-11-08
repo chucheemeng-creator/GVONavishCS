@@ -716,7 +716,11 @@ public sealed class MainForm : Form
         HashSet<DiscoveryItem> onList = [.. _session.Matched.Keys.Where(k => _session.Matched[k] != f),
             .. _session.Unmatched.Values.Where(u => u != f && u.Item is not null && ViewOf(u) is { Checked: true }).Select(u => u.Item!)];
         DiscoveryItem item;
-        using (ItemPickerForm dlg = new(_session.Book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue, f.Item))
+        // 主視窗置頂（F1）時，選擇視窗也要置頂，不然會被主視窗蓋住、無法操作
+        using (ItemPickerForm dlg = new(_session.Book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue, f.Item)
+               {
+                   TopMost = TopMost,
+               })
         {
             if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem picked)
             {
