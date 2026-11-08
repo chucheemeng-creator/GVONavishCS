@@ -198,11 +198,12 @@ public class SessionTests
     }
 
     [Fact]
-    public void 依價值排列但有一處功績和Excel對不上_仍然用功績推斷()
+    public void 功績和Excel對不上時不推斷_也不列出猜的名稱()
     {
         // 實際的一頁（天文，依價值排列）：「天鵝座」漏讀成「天座」，三個字的「天○座」有十幾個一樣像。
-        // Excel 的功績：日落的太白星 165 排在天爐座 150 後面（和遊戲不一致），以前因此整頁判斷成「排序看不出來」，
-        // 只好列出最像的第一個（天兔座，功績 1330）。上下是水委一 180、金星的圓缺 170：只有天鵝座 180 符合
+        // 遊戲改版調整過功績、Excel 沒跟上：日落的太白星 165 排在天爐座 150 後面。
+        // 這種超出預期的情況不推斷（排序看不出來），也不列出「最像的第一個」（以前會列出功績 1330 的天兔座），
+        // 讓使用者自己指定
         string[] names = ["處女座的漩渦星雲", "天龍座的貓眼狀星雲", "天鷹座", "大熊座之圓形星雲", "小麥哲倫星雲",
             "水委一", "天鵝座", "金星的圓缺", "天爐座", "日落的太白星"];
         List<ListRow> page = [.. names.Select((n, i) => Row(i, n))];
@@ -210,9 +211,12 @@ public class SessionTests
 
         DiscoverySession session = NewSession();
         PageResult result = session.AddPage("天文", page);
-        Assert.Equal(SortMode.ByValue, result.PageSort);
-        Assert.True(MatchedOf(session, "天鵝座").Match.IsMatch);
-        Assert.DoesNotContain(session.All, f => f.Item?.Name == "天兔座");
+        Assert.Equal(SortMode.Unknown, result.PageSort);
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.True(f.Undecided);
+        Assert.Null(f.Item); // 不給答案，打勾也不會寫入
+        Assert.Equal("3 個字，在「水委一」和「金星的圓缺」之間", f.Note);
+        Assert.DoesNotContain(session.All, x => x.Item?.Name == "天兔座");
     }
 
     [Fact]

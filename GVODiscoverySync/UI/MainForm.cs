@@ -868,6 +868,13 @@ public sealed class MainForm : Form
             color = UiColors.PickForList(Color.Firebrick, Color.FromArgb(255, 140, 110));
             check = false;
         }
+        else if (f.Undecided)
+        {
+            // 好幾個名稱一樣像：不列出猜的名稱（容易誤導），請使用者自己指定
+            status = "不確定，請手動指定";
+            color = UiColors.PickForList(Color.DarkOrange, Color.Orange);
+            check = false;
+        }
         else if (f.Item is null)
         {
             status = "找不到";
@@ -1138,8 +1145,9 @@ public sealed class MainForm : Form
         // 新增＝勾選了、會寫入 Excel 的（「不確定」「推斷」的列自己確認後打勾，也算新增）；
         // 不確定＝需要確認、還沒勾的
         int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is { Checked: true });
-        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is not { Checked: true } && f.NeedsConfirm);
-        int missing = all.Count(f => f.Item is null);
+        int unsure = all.Count(f => (f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is not { Checked: true } && f.NeedsConfirm)
+                                    || f.Undecided);
+        int missing = all.Count(f => f.Item is null && !f.Undecided);
         _lblSummary.Text = $"新增 {newCount}　已經打勾 {already}　不確定 {unsure}　找不到 {missing}";
     }
 
