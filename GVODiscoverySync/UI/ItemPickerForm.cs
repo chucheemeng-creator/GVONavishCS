@@ -39,6 +39,9 @@ public sealed class ItemPickerForm : Form
     // 讀不出來的列量到的字寬（遊戲像素，0 表示沒量到）：沒有搜尋時只列出字數對得上的
     private readonly double _textWidth;
 
+    // 目前遊戲畫面上的發現物：字數不同也列出來，對照遊戲畫面看位置
+    private readonly IReadOnlySet<DiscoveryItem> _onScreen;
+
     // 這一列目前對到（或推斷出來）的發現物：開啟時捲到它、預先選好，確認無誤直接按確定
     private readonly DiscoveryItem? _current;
 
@@ -53,10 +56,11 @@ public sealed class ItemPickerForm : Form
 
     public ItemPickerForm(DiscoveryBook book, string category, string screenText, int character,
         IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "", bool pageByValue = false,
-        DiscoveryItem? current = null, double textWidth = 0)
+        DiscoveryItem? current = null, double textWidth = 0, IReadOnlySet<DiscoveryItem>? onScreen = null)
     {
         _pageByValue = pageByValue;
         _textWidth = textWidth;
+        _onScreen = onScreen ?? new HashSet<DiscoveryItem>();
         _current = current;
         _book = book;
         _screenText = screenText;
@@ -90,7 +94,7 @@ public sealed class ItemPickerForm : Form
         {
             Text = (screenText == "" ? "（讀不出來）" : screenText)
                    + (textWidth > 0
-                       ? $"　{Math.Round((textWidth + 2) / NameMatcher.FullWidthCharPixels)} 個字（只列出字數相同的；打字搜尋可以找全部）"
+                       ? $"　{Math.Round((textWidth + 2) / NameMatcher.FullWidthCharPixels)} 個字（只列出字數相同的和目前畫面上的；打字搜尋可以找全部）"
                        : ""),
             AutoSize = true,
             Margin = new Padding(0, 6, 0, 0),
@@ -168,9 +172,11 @@ public sealed class ItemPickerForm : Form
         List<(DiscoveryItem Item, double Score)> rows = [];
         foreach (DiscoveryItem item in items)
         {
-            if (search == "" && _textWidth > 0 && !NameMatcher.FitsWidth(item.Name, _textWidth))
+            // 字數對不上、也不在目前畫面上（上下兩列也算）的不列出；搜尋時不限制，萬一字寬量錯還找得到
+            if (search == "" && _textWidth > 0 && !NameMatcher.FitsWidth(item.Name, _textWidth)
+                && !_onScreen.Contains(item) && item.Name != _above && item.Name != _below)
             {
-                continue; // 字數對不上（搜尋時不限制，萬一字寬量錯還找得到）
+                continue;
             }
             string name = NameMatcher.Normalize(item.Name);
             double score;

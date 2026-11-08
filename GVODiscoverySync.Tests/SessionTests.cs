@@ -102,6 +102,18 @@ public class SessionTests
         Assert.Empty(session.All);
     }
 
+    [Fact]
+    public void 記得目前畫面上的發現物()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("植物");
+        session.AddPage("植物", Page(order, 0));
+        session.AddPage("植物", Page(order, 10));
+        Assert.Equal(order.Skip(10).Take(10).ToHashSet(), session.LastPage.ToHashSet()); // 只有最近一頁的
+        session.Clear();
+        Assert.Empty(session.LastPage);
+    }
+
     // ── 重複讀取 ──
 
     [Fact]

@@ -42,6 +42,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// <summary>全部的結果。</summary>
     public IEnumerable<Found> All => _matched.Values.Concat(_unmatched.Values);
 
+    /// <summary>最近讀到的一頁上確定對到的發現物（目前遊戲畫面上的；選擇視窗用來顯示前後的參考）。</summary>
+    public IReadOnlySet<DiscoveryItem> LastPage => _lastPage;
+
+    private HashSet<DiscoveryItem> _lastPage = [];
+
     /// <summary>記住的排序方式（證據充分的頁面判斷出來的）。</summary>
     public SortMode RememberedSort => _sortMode;
 
@@ -76,6 +81,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         _anonymousRemoved.Clear();
         _sortMode = SortMode.Unknown;
         _pageSort = SortMode.Unknown;
+        _lastPage = [];
     }
 
     /// <summary>
@@ -102,6 +108,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     public PageResult AddPage(string category, IReadOnlyList<ListRow> pageRows)
     {
         List<(ListRow Row, string Text, MatchResult Match)> picks = Analyze(category, pageRows, remember: true);
+        _lastPage = [.. picks.Where(p => p.Match.IsMatch).SelectMany(p => p.Match.IsVariant ? p.Match.Variants : [p.Match.Item!])];
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<VariantRow> Rows)> variantRows = [];
