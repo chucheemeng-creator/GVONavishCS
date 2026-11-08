@@ -135,7 +135,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth))
                 {
                     added++;
                 }
@@ -229,10 +229,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             : pick.Text;
 
     /// <summary>
-    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的。
+    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的；
+    /// width 是量到的字寬（遊戲像素，0 表示沒量到），用來在說明裡寫出名稱有幾個字。
     /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
     /// </summary>
-    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow)
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width)
     {
         // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
         string key = confidentAbove != "" || confidentBelow != ""
@@ -250,6 +251,12 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             (_, "") => $"在「{above}」下面",
             _ => $"在「{above}」和「{below}」之間",
         };
+        // 量到字寬時先寫幾個字（中文字每個 16 遊戲像素；量的是第一個字左邊到最後一個字右邊，少大約 2）
+        int chars = width > 0 ? (int)Math.Round((width + 2) / NameMatcher.FullWidthCharPixels) : 0;
+        if (chars > 0)
+        {
+            note = $"{chars} 個字，{note}";
+        }
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),

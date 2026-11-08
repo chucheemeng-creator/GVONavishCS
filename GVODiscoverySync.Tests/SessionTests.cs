@@ -143,6 +143,20 @@ public class SessionTests
     }
 
     [Fact]
+    public void 讀不出來的列說明有幾個字()
+    {
+        // 依價值排列的一頁，中間一列讀不出來、推斷不出來：說明寫出字數和位置
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByValue("中型生物");
+        List<ListRow> page = Page(order, 20);
+        string above = page[4].Text, below = page[6].Text;
+        session.AddPage("中型生物", Replace(page, 5, Misread(5, "", 14))); // 一個字寬
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.True(f.Unreadable);
+        Assert.Equal($"1 個字，在「{above}」和「{below}」之間", f.Note);
+    }
+
+    [Fact]
     public void 同一頁已確定的不會是這一列()
     {
         // 「帶背的飛龍骨架」（漏了一個字）：帶背刺、帶背鰭都像，分不出來
