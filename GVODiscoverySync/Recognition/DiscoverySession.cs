@@ -261,7 +261,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     {
         // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
         string key = confidentAbove != "" || confidentBelow != ""
-            ? category + "\n?" + confidentAbove + "|" + confidentBelow
+            ? PositionKey(category, confidentAbove, confidentBelow)
             : category + "\n?~" + above + "|" + below;
         if (_unmatched.ContainsKey(key) || _resolvedKeys.Contains(key)
             || _unmatched.Values.Any(f => f.Category == category && SamePosition(f, confidentAbove, confidentBelow)))
@@ -716,23 +716,39 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
         string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0)
     {
-        if (_resolvedKeys.Contains(TextKey(category, screenText)))
+        // 手動處理過了：讀得到字的看文字；讀不出來、推斷出來的（沒有文字）看位置
+        bool noText = NameMatcher.Normalize(screenText) == "";
+        if (noText ? _resolvedKeys.Contains(PositionKey(category, confidentAbove, confidentBelow))
+                   : _resolvedKeys.Contains(TextKey(category, screenText)))
         {
-            return false; // 這個文字手動處理過了
+            return false;
         }
         Found found;
         if (match.IsMatch)
         {
             if (_matched.TryGetValue(match.Item!, out Found? existing))
             {
-                if (hasCard && !existing.HasCard)
+                if (!existing.Manual && existing.Match.Score == 0 && match.Score > 0)
+                {
+                    // 之前讀不出來、推斷出來的，這次讀到字了：換成讀到的結果（預設打勾）
+                    existing.ScreenText = screenText;
+                    existing.Match = match;
+                    existing.HasCard |= hasCard;
+                    Updated?.Invoke(existing, true);
+                }
+                else if (hasCard && !existing.HasCard)
                 {
                     existing.HasCard = true;
                     Updated?.Invoke(existing, false);
                 }
                 return false;
             }
-            found = new Found { Category = category, ScreenText = screenText, Match = match, HasCard = hasCard };
+            // 上下列、字寬、排序也記下來：使用者打開「指定 Excel 發現物」確認時要用（只列出字數相同的、功績範圍）
+            found = new Found
+            {
+                Category = category, ScreenText = screenText, Match = match, HasCard = hasCard,
+                Above = confidentAbove, Below = confidentBelow, TextWidth = width, PageByValue = _pageSort == SortMode.ByValue,
+            };
             _matched[match.Item!] = found;
         }
         else
@@ -748,6 +764,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
                 Above = confidentAbove, Below = confidentBelow, Note = note, TextWidth = width,
+                PageByValue = _pageSort == SortMode.ByValue,
             };
             _unmatched[key] = found;
         }
@@ -757,6 +774,10 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     }
 
     private static string TextKey(string category, string screenText) => category + "\n" + NameMatcher.Normalize(screenText);
+
+    // 用位置（上下已確定的列）當索引鍵：讀不出來的列（和 AddUnreadable 同一種寫法，手動處理過的位置兩邊都認得）
+    private static string PositionKey(string category, string confidentAbove, string confidentBelow)
+        => category + "\n?" + confidentAbove + "|" + confidentBelow;
 
     /// <summary>
     /// 手動指定這一筆是 item。item 已經是清單上的另一筆時不改，回傳那一筆（由呼叫端問使用者要不要移除這一筆）。
@@ -846,7 +867,20 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         {
             _resolvedKeys.Add(f.UnmatchedKey);
         }
-        else if (!f.Match.IsVariant)
+        else if (f.Match.IsVariant)
+        {
+            // 同名的一組：不記（見上）
+        }
+        else if (NameMatcher.Normalize(f.ScreenText) == "")
+        {
+            // 讀不出來、推斷出來的（沒有文字）：記位置。不能記文字——空字串會擋掉這個分類以後所有推斷出來的列。
+            // 上下都沒有已確定的列時無法辨識位置，不記
+            if (f.Above != "" || f.Below != "")
+            {
+                _resolvedKeys.Add(PositionKey(f.Category, f.Above, f.Below));
+            }
+        }
+        else
         {
             _resolvedKeys.Add(TextKey(f.Category, f.ScreenText));
         }

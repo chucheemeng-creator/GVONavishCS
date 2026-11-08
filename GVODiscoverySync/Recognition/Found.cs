@@ -10,8 +10,9 @@ namespace GVODiscoverySync.Recognition;
 public sealed class Found
 {
     public required string Category { get; set; }
-    public required string ScreenText { get; init; }
-    public required MatchResult Match { get; init; }
+    // 可以改：先推斷出來（讀不出來）的列，之後讀到字時換成讀到的結果
+    public required string ScreenText { get; set; }
+    public required MatchResult Match { get; set; }
     public bool HasCard { get; set; }
     /// <summary>畫面上顯示這一筆的那一列（由畫面設定，這裡不使用）。</summary>
     public object? View { get; set; }
@@ -64,12 +65,13 @@ public sealed class Found
     /// <remarks>
     /// 不確定的列（好幾個名稱一樣像，例如「天座」之於天兔座、天貓座、天鵝座……）不給答案：
     /// 列出最像的第一個只是剛好排在前面，容易誤導（看起來像程式的判斷，打勾就寫進 Excel），要使用者自己指定。
-    /// 同名的一組不在此限（組裡是哪一個另外處理）。
+    /// 同名組裡配對成功的列有 Assigned，不受影響。
     /// </remarks>
-    public DiscoveryItem? Item => Assigned ?? (Match.Ambiguous && !Match.IsVariant ? null : Match.Item);
+    public DiscoveryItem? Item => Assigned ?? (Match.Ambiguous ? null : Match.Item);
 
     /// <summary>不確定、還沒指定的列（好幾個名稱一樣像，不給答案）。</summary>
-    public bool Undecided => Assigned is null && Match.Ambiguous && !Match.IsVariant && !Unreadable;
+    // 同名組裡配對成功的列一定有 Assigned；Assigned 是 null 又 IsVariant 的，是讀到的字不確定、最像的剛好是一組同名的
+    public bool Undecided => Assigned is null && Match.Ambiguous && !Unreadable;
 
     /// <summary>要使用者確認的（同名分不出是哪一個、不確定、用排序推斷的）；手動指定的已經確認過。</summary>
     public bool NeedsConfirm => !Manual && (VariantUnsure || Match.Ambiguous || Match.Score == 0);
