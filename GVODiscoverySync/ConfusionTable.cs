@@ -49,6 +49,7 @@ public sealed class ConfusionTable
         ["鲽"] = "鰈", // 鰈魚、狹鱗庸鰈（簡體字形）
         ["蟤"] = "螺", // 海螺珍珠、螺旋型叫拜樓
         ["甫"] = "埔", // 海埔姜、北埔蟬：「土」字旁沒讀到
+        ["瑡"] = "獅", // 石獅子、鬆獅犬、獅心王的甲冑等：「犭」讀成「王」
     };
 
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.OcrConfusions.json");

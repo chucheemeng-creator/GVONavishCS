@@ -92,7 +92,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         }
         // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
         SortMode mode = DetectSort(picks, remember);
-        ResolveWithinPage(category, picks, mode == SortMode.ByName);
+        ResolveWithinPage(category, picks, mode);
         return picks;
     }
 
@@ -289,11 +289,13 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// 用同一頁的其他列，推斷「不確定」「找不到」的列（例如漏讀了「鰭」，「帶背的飛龍骨架」跟「帶背刺」「帶背鰭」一樣像）：
     ///   1. 同一頁的每一列都是不同的發現物：別列已經確定的，不會是這一列（同名的一組除外）
     ///   2. 清單照名稱的字元編碼排序時（預設的排序；按 ⇅ 換過排序就不是），這一列一定排在上下已確定的兩列之間
+    ///   3. 清單依價值排列時，這一列的功績一定介於上下已確定的兩列之間（例如上下是北非髯羊 13、摩弗倫羊 12，
+    ///      一個字的只有獾 13 符合；獐 640、豺 59 都不是）
     /// 排除之後只剩一個、或第一名明顯領先，就當成確定。新確定的列可以再幫忙推斷別列，所以最多做 3 輪。
     /// 注意：只排除「這一頁」已確定的，不排除前幾頁對到的（_matched）。捲動時上下頁大部分重疊，
     /// 這一列很可能就是前幾頁已經對到的那一個、只是這次讀錯了；排除它會被推成另一個沒發現的發現物並預設打勾。
     /// </summary>
-    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool sortedByName)
+    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, SortMode mode)
     {
         for (int pass = 0; pass < 3; pass++)
         {
@@ -304,8 +306,14 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 .Where(p => p.Match.IsMatch)
                 .Select(p => (p.Row.Index, Name: NameMatcher.SortKey(p.Match.Item!.Name)))]; // 比較順序用拿掉結尾數字的名稱
             // 這一頁照名稱排序（DetectSort 判斷的），而且新確定的列也沒有違反，才用上下列的順序排除候選
-            bool sorted = sortedByName
+            bool sorted = mode == SortMode.ByName
                           && anchors.Zip(anchors.Skip(1)).All(z => string.CompareOrdinal(z.First.Name, z.Second.Name) <= 0);
+            // 依價值排列時用功績：同名的一組功績各不相同、功績 0（Excel 沒寫）的不知道多少，都不當界線
+            List<(int Index, int Merit)> meritAnchors = [.. picks
+                .Where(p => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item!.Merit > 0)
+                .Select(p => (p.Row.Index, p.Match.Item!.Merit))];
+            bool sortedByValue = mode == SortMode.ByValue
+                                 && meritAnchors.Zip(meritAnchors.Skip(1)).All(z => z.First.Merit >= z.Second.Merit);
 
             bool changed = false;
             for (int i = 0; i < picks.Count; i++)
@@ -317,16 +325,22 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 }
                 string? lower = sorted ? anchors.Where(a => a.Index < row.Index).Select(a => a.Name).LastOrDefault() : null;
                 string? upper = sorted ? anchors.Where(a => a.Index > row.Index).Select(a => a.Name).FirstOrDefault() : null;
+                int? high = sortedByValue ? meritAnchors.Where(a => a.Index < row.Index).Select(a => (int?)a.Merit).LastOrDefault() : null;
+                int? low = sortedByValue ? meritAnchors.Where(a => a.Index > row.Index).Select(a => (int?)a.Merit).FirstOrDefault() : null;
+                // 功績在上下兩列之間（相同也算；同名的一組只要其中一個符合；Excel 沒寫功績的不排除）
+                Func<IReadOnlyList<DiscoveryItem>, bool> fitsMerit = g => g.Any(x =>
+                    x.Merit <= 0 || ((high is null || x.Merit <= high) && (low is null || x.Merit >= low)));
 
-                // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、這一頁已確定的排除候選，只剩一個就是它。
-                // 例如昆蟲類一個字的只有「蠶」；量不到字寬時，要照名稱排序而且上下都有確定的列才推斷
+                // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、功績、這一頁已確定的排除候選，只剩一個就是它。
+                // 例如昆蟲類一個字的只有「蠶」；量不到字寬時，要上下都有確定的列（名稱或功績的界線）才推斷
                 if (row.Readings.Count == 0)
                 {
-                    if (row.TextWidth > 0 || (lower is not null && upper is not null))
+                    if (row.TextWidth > 0 || (lower is not null && upper is not null) || (high is not null && low is not null))
                     {
                         List<IReadOnlyList<DiscoveryItem>> between = [.. matcher.Between(category, lower, upper)
                             .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
-                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))];
+                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))
+                            .Where(fitsMerit)];
                         if (between.Count == 1)
                         {
                             IReadOnlyList<DiscoveryItem> only = between[0];
@@ -356,6 +370,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     .Where(c => !(c.Items.Count == 1 && claimed.Contains(c.Items[0])))
                     .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), lower) >= 0)
                     .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), upper) <= 0)
+                    .Where(c => fitsMerit(c.Items))
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {

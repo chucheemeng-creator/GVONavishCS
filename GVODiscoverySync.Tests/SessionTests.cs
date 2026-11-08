@@ -157,6 +157,44 @@ public class SessionTests
     }
 
     [Fact]
+    public void 依價值排列時讀不出來的一個字用功績推斷()
+    {
+        // 中型生物一個字的有獐 640、豺 59、獾 13。依價值排列，獾的上下是鬣狗 24、北非髯羊 13：只有獾符合
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByValue("中型生物");
+        int at = order.FindIndex(i => i.Name == "獾");
+        int start = at - 6;
+        session.AddPage("中型生物", Replace(Page(order, start), 6, Misread(6, "", TestBook.GameWidth("獾"))));
+
+        Found badger = MatchedOf(session, "獾");
+        Assert.Equal(0, badger.Match.Score); // 推斷出來的，要使用者確認
+        Assert.True(badger.NeedsConfirm);
+        Assert.Empty(session.Unmatched);
+    }
+
+    [Fact]
+    public void 依價值排列時功績界線也用在讀錯的列()
+    {
+        // 「帶背的飛龍骨架」：帶背刺、帶背鰭一樣像。依價值排列時，只有功績在上下兩列之間的那一個可能
+        DiscoveryItem spine = Items("化石").Single(i => i.Name == "帶背刺的飛龍骨架");
+        DiscoveryItem fin = Items("化石").Single(i => i.Name == "帶背鰭的飛龍骨架");
+        Assert.NotEqual(spine.Merit, fin.Merit);
+        DiscoveryItem target = spine.Merit > fin.Merit ? fin : spine; // 讓功績較低的那一個當答案
+        List<DiscoveryItem> order = ByValue("化石");
+        int at = order.IndexOf(target);
+        int start = Math.Max(0, Math.Min(at - 5, order.Count - 10));
+        List<ListRow> page = Page(order, start);
+        int row = at - start;
+        // 另一個（功績較高的）不在這一頁上的話，才是只靠功績分辨
+        DiscoveryItem other = target == fin ? spine : fin;
+        Assert.DoesNotContain(page, r => r.Text == other.Name);
+
+        DiscoverySession session = NewSession();
+        session.AddPage("化石", Replace(page, row, Misread(row, "帶背的飛龍骨架", TestBook.GameWidth(target.Name))));
+        Assert.True(MatchedOf(session, target.Name).Match.IsMatch);
+    }
+
+    [Fact]
     public void 同一頁已確定的不會是這一列()
     {
         // 「帶背的飛龍骨架」（漏了一個字）：帶背刺、帶背鰭都像，分不出來
