@@ -158,7 +158,9 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 }
                 group.Rows.Add(new VariantRow(text, row.HasCard, occurrence));
             }
-            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
+            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1),
+                         match.IsMatch ? "" : PositionNote(i > 0 ? NameOf(picks[i - 1]) : "", i + 1 < picks.Count ? NameOf(picks[i + 1]) : "", row.TextWidth),
+                         row.TextWidth))
             {
                 added++;
             }
@@ -235,6 +237,21 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             ? (pick.Match.IsVariant ? NameMatcher.SortKey(item.Name) : item.Name)
             : pick.Text;
 
+    // 對不到的列的說明：幾個字、在哪兩列之間（above、below 是顯示用的上下列名稱；width 是量到的字寬，0 表示沒量到）
+    private static string PositionNote(string above, string below, double width)
+    {
+        string note = (above, below) switch
+        {
+            ("", "") => "位置不明",
+            ("", _) => $"在「{below}」上面",
+            (_, "") => $"在「{above}」下面",
+            _ => $"在「{above}」和「{below}」之間",
+        };
+        // 量到字寬時先寫幾個字（中文字每個 16 遊戲像素；量的是第一個字左邊到最後一個字右邊，少大約 2）
+        int chars = width > 0 ? (int)Math.Round((width + 2) / NameMatcher.FullWidthCharPixels) : 0;
+        return chars > 0 ? $"{chars} 個字，{note}" : note;
+    }
+
     /// <summary>
     /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的；
     /// width 是量到的字寬（遊戲像素，0 表示沒量到），用來在說明裡寫出名稱有幾個字。
@@ -251,19 +268,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         {
             return false;
         }
-        string note = (above, below) switch
-        {
-            ("", "") => "位置不明",
-            ("", _) => $"在「{below}」上面",
-            (_, "") => $"在「{above}」下面",
-            _ => $"在「{above}」和「{below}」之間",
-        };
-        // 量到字寬時先寫幾個字（中文字每個 16 遊戲像素；量的是第一個字左邊到最後一個字右邊，少大約 2）
-        int chars = width > 0 ? (int)Math.Round((width + 2) / NameMatcher.FullWidthCharPixels) : 0;
-        if (chars > 0)
-        {
-            note = $"{chars} 個字，{note}";
-        }
+        string note = PositionNote(above, below, width);
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
@@ -695,9 +700,12 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         return added;
     }
 
-    /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
+    /// <summary>
+    /// 加入一筆讀到的結果。已經有了就回傳 false。
+    /// 對不到的（找不到、不確定）：note 是位置說明（和讀不出來的一樣，「1 個字，在「A」和「B」之間」），width 是量到的字寬。
+    /// </summary>
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
-        string confidentAbove = "", string confidentBelow = "")
+        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0)
     {
         if (_resolvedKeys.Contains(TextKey(category, screenText)))
         {
@@ -730,7 +738,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             found = new Found
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
-                Above = confidentAbove, Below = confidentBelow,
+                Above = confidentAbove, Below = confidentBelow, Note = note, TextWidth = width,
             };
             _unmatched[key] = found;
         }

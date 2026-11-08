@@ -169,6 +169,19 @@ public class SessionTests
     }
 
     [Fact]
+    public void 找不到的列也說明有幾個字和位置()
+    {
+        DiscoverySession session = NewSession();
+        List<ListRow> page = Page(ByName("植物"), 30);
+        string above = page[4].Text, below = page[6].Text;
+        session.AddPage("植物", Replace(page, 5, Misread(5, "囗囗囗", 46))); // 讀成亂碼、三個字寬
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.Null(f.Item);
+        Assert.Equal($"3 個字，在「{above}」和「{below}」之間", f.Note);
+        Assert.Equal(46, f.TextWidth);
+    }
+
+    [Fact]
     public void 依價值排列時讀不出來的一個字用功績推斷()
     {
         // 中型生物一個字的有獐 640、豺 59、獾 13。依價值排列，獾的上下是鬣狗 24、北非髯羊 13：只有獾符合
