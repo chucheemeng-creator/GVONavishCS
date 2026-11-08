@@ -198,6 +198,24 @@ public class SessionTests
     }
 
     [Fact]
+    public void 依價值排列但有一處功績和Excel對不上_仍然用功績推斷()
+    {
+        // 實際的一頁（天文，依價值排列）：「天鵝座」漏讀成「天座」，三個字的「天○座」有十幾個一樣像。
+        // Excel 的功績：日落的太白星 165 排在天爐座 150 後面（和遊戲不一致），以前因此整頁判斷成「排序看不出來」，
+        // 只好列出最像的第一個（天兔座，功績 1330）。上下是水委一 180、金星的圓缺 170：只有天鵝座 180 符合
+        string[] names = ["處女座的漩渦星雲", "天龍座的貓眼狀星雲", "天鷹座", "大熊座之圓形星雲", "小麥哲倫星雲",
+            "水委一", "天鵝座", "金星的圓缺", "天爐座", "日落的太白星"];
+        List<ListRow> page = [.. names.Select((n, i) => Row(i, n))];
+        page = Replace(page, 6, Misread(6, "天座", TestBook.GameWidth("天鵝座")));
+
+        DiscoverySession session = NewSession();
+        PageResult result = session.AddPage("天文", page);
+        Assert.Equal(SortMode.ByValue, result.PageSort);
+        Assert.True(MatchedOf(session, "天鵝座").Match.IsMatch);
+        Assert.DoesNotContain(session.All, f => f.Item?.Name == "天兔座");
+    }
+
+    [Fact]
     public void 依價值排列時功績界線也用在讀錯的列()
     {
         // 「帶背的飛龍骨架」：帶背刺、帶背鰭一樣像。依價值排列時，只有功績在上下兩列之間的那一個可能

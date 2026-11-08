@@ -324,8 +324,9 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             List<(int Index, int Merit)> meritAnchors = [.. picks
                 .Where(p => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item!.Merit > 0)
                 .Select(p => (p.Row.Index, p.Match.Item!.Merit))];
-            bool sortedByValue = mode == SortMode.ByValue
-                                 && meritAnchors.Zip(meritAnchors.Skip(1)).All(z => z.First.Merit >= z.Second.Merit);
+            // 依價值排列（容許 Excel 功績和遊戲有一處對不上，見 DetectSort）：每一列用上下最近的已確定列當界線，
+            // 界線本身顛倒（上面的功績比下面低，表示這裡就是對不上的地方）時這一列不用功績
+            bool sortedByValue = mode == SortMode.ByValue;
 
             bool changed = false;
             for (int i = 0; i < picks.Count; i++)
@@ -339,6 +340,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 string? upper = sorted ? anchors.Where(a => a.Index > row.Index).Select(a => a.Name).FirstOrDefault() : null;
                 int? high = sortedByValue ? meritAnchors.Where(a => a.Index < row.Index).Select(a => (int?)a.Merit).LastOrDefault() : null;
                 int? low = sortedByValue ? meritAnchors.Where(a => a.Index > row.Index).Select(a => (int?)a.Merit).FirstOrDefault() : null;
+                if (high is not null && low is not null && high < low)
+                {
+                    high = null;
+                    low = null;
+                }
                 // 功績在上下兩列之間（相同也算；同名的一組只要其中一個符合；Excel 沒寫功績的不排除）
                 Func<IReadOnlyList<DiscoveryItem>, bool> fitsMerit = g => g.Any(x =>
                     x.Merit <= 0 || ((high is null || x.Merit <= high) && (low is null || x.Merit >= low)));
@@ -459,6 +465,9 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     ///   - 證據不足（例如發現物少、這一頁只有一兩個已確定的列，兩種都符合）：沒有矛盾就沿用記住的排序方式
     /// 兩種都符合時不下判斷，免得誤判（列數少時常常兩種都符合）。
     /// 用剛開始玩的玩家模擬過（只有 1%～3% 的發現物）：判斷不出來的時候有，但沒有判斷錯的。
+    /// 例外：Excel 的功績偶爾和遊戲不一致（天文的「日落的太白星」165 排在「天爐座」150 後面），
+    /// 已確定的列至少 6 個、功績只有一處由低變高、名稱順序又明顯不對（至少兩處）時，這一頁還是當成依價值排列
+    /// （不記住、也不清掉記住的排序方式）。
     /// </summary>
     private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks, bool remember)
     {
@@ -466,8 +475,15 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         List<(ListRow Row, string Text, MatchResult Match)> anchors = [.. picks.Where(IsAnchor)];
         List<int> merits = [.. anchors.Select(p => p.Match.Item!.Merit)];
         List<string> names = [.. anchors.Select(p => NameMatcher.SortKey(p.Match.Item!.Name))];
-        bool valueOrdered = merits.Zip(merits.Skip(1)).All(z => z.First >= z.Second);
-        bool nameOrdered = names.Zip(names.Skip(1)).All(z => string.CompareOrdinal(z.First, z.Second) <= 0);
+        int valueBreaks = merits.Zip(merits.Skip(1)).Count(z => z.First < z.Second);
+        int nameBreaks = names.Zip(names.Skip(1)).Count(z => string.CompareOrdinal(z.First, z.Second) > 0);
+        bool valueOrdered = valueBreaks == 0;
+        bool nameOrdered = nameBreaks == 0;
+        // 功績只有一處和 Excel 對不上（Excel 的資料誤差），其他都由高到低：還是依價值排列
+        if (!valueOrdered && valueBreaks == 1 && merits.Count >= 6 && nameBreaks >= 2)
+        {
+            return SortMode.ByValue;
+        }
 
         bool value4 = valueOrdered && merits.Count >= 4, name4 = nameOrdered && names.Count >= 4;
         if (remember && value4 != name4)
