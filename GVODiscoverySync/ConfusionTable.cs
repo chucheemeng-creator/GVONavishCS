@@ -50,6 +50,10 @@ public sealed class ConfusionTable
         ["蟤"] = "螺", // 海螺珍珠、螺旋型叫拜樓
         ["甫"] = "埔", // 海埔姜、北埔蟬：「土」字旁沒讀到
         ["瑡"] = "獅", // 石獅子、鬆獅犬、獅心王的甲冑等：「犭」讀成「王」
+        ["矕"] = "彎", // 藍彎角羚、彎角大羚羊、福特彎圖拉島
+        ["令"] = "羚", // 高角羚、湯氏瞪羚等：「羊」字旁沒讀到（法令的木簡、白令海峽原本就有「令」，不受影響）
+        ["旨"] = "脂", // 金脂鯉、黑脂鯧：「月」字旁沒讀到
+        ["橵"] = "撒", // 撒哈拉沙漠、凱撒大帝的寶劍等
     };
 
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.OcrConfusions.json");

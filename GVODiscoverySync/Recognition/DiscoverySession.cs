@@ -260,7 +260,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow,
+            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow, TextWidth = width,
             PageByValue = _pageSort == SortMode.ByValue,
         };
         _unmatched[key] = found;

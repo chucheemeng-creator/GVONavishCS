@@ -34,6 +34,9 @@ public sealed class Found
     /// </summary>
     public bool ByMerit { get; set; }
 
+    /// <summary>畫面上量到的字寬（遊戲像素，0 表示沒量到）。讀不出來的列用來在選擇視窗只列出字數對得上的。</summary>
+    public double TextWidth { get; init; }
+
     /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
     public bool Unreadable { get; init; }
 
