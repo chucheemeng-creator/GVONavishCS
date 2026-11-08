@@ -42,6 +42,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// <summary>全部的結果。</summary>
     public IEnumerable<Found> All => _matched.Values.Concat(_unmatched.Values);
 
+    /// <summary>最近讀到的一頁上確定對到的發現物（目前遊戲畫面上的；選擇視窗用來顯示前後的參考）。</summary>
+    public IReadOnlySet<DiscoveryItem> LastPage => _lastPage;
+
+    private HashSet<DiscoveryItem> _lastPage = [];
+
     /// <summary>記住的排序方式（證據充分的頁面判斷出來的）。</summary>
     public SortMode RememberedSort => _sortMode;
 
@@ -76,6 +81,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         _anonymousRemoved.Clear();
         _sortMode = SortMode.Unknown;
         _pageSort = SortMode.Unknown;
+        _lastPage = [];
     }
 
     /// <summary>
@@ -92,7 +98,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         }
         // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
         SortMode mode = DetectSort(picks, remember);
-        ResolveWithinPage(category, picks, mode == SortMode.ByName);
+        ResolveWithinPage(category, picks, mode);
         return picks;
     }
 
@@ -102,6 +108,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     public PageResult AddPage(string category, IReadOnlyList<ListRow> pageRows)
     {
         List<(ListRow Row, string Text, MatchResult Match)> picks = Analyze(category, pageRows, remember: true);
+        _lastPage = [.. picks.Where(p => p.Match.IsMatch).SelectMany(p => p.Match.IsVariant ? p.Match.Variants : [p.Match.Item!])];
         // 同名的一組另外處理（要看同一頁出現幾次）
         int added = 0;
         Dictionary<DiscoveryItem, (MatchResult Match, List<VariantRow> Rows)> variantRows = [];
@@ -135,7 +142,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth))
                 {
                     added++;
                 }
@@ -151,7 +158,9 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 }
                 group.Rows.Add(new VariantRow(text, row.HasCard, occurrence));
             }
-            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1)))
+            else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1),
+                         match.IsMatch ? "" : PositionNote(i > 0 ? NameOf(picks[i - 1]) : "", i + 1 < picks.Count ? NameOf(picks[i + 1]) : "", row.TextWidth),
+                         row.TextWidth))
             {
                 added++;
             }
@@ -228,11 +237,27 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             ? (pick.Match.IsVariant ? NameMatcher.SortKey(item.Name) : item.Name)
             : pick.Text;
 
+    // 對不到的列的說明：幾個字、在哪兩列之間（above、below 是顯示用的上下列名稱；width 是量到的字寬，0 表示沒量到）
+    private static string PositionNote(string above, string below, double width)
+    {
+        string note = (above, below) switch
+        {
+            ("", "") => "位置不明",
+            ("", _) => $"在「{below}」上面",
+            (_, "") => $"在「{above}」下面",
+            _ => $"在「{above}」和「{below}」之間",
+        };
+        // 量到字寬時先寫幾個字（中文字每個 16 遊戲像素；量的是第一個字左邊到最後一個字右邊，少大約 2）
+        int chars = width > 0 ? (int)Math.Round((width + 2) / NameMatcher.FullWidthCharPixels) : 0;
+        return chars > 0 ? $"{chars} 個字，{note}" : note;
+    }
+
     /// <summary>
-    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的。
+    /// 加入一筆「有字但讀不出來」的列。above、below 是顯示用的上下列名稱，confidentAbove、confidentBelow 是已確定的；
+    /// width 是量到的字寬（遊戲像素，0 表示沒量到），用來在說明裡寫出名稱有幾個字。
     /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
     /// </summary>
-    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow)
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width)
     {
         // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
         string key = confidentAbove != "" || confidentBelow != ""
@@ -243,17 +268,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         {
             return false;
         }
-        string note = (above, below) switch
-        {
-            ("", "") => "位置不明",
-            ("", _) => $"在「{below}」上面",
-            (_, "") => $"在「{above}」下面",
-            _ => $"在「{above}」和「{below}」之間",
-        };
+        string note = PositionNote(above, below, width);
         Found found = new()
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
-            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow,
+            Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow, TextWidth = width,
             PageByValue = _pageSort == SortMode.ByValue,
         };
         _unmatched[key] = found;
@@ -282,11 +301,13 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// 用同一頁的其他列，推斷「不確定」「找不到」的列（例如漏讀了「鰭」，「帶背的飛龍骨架」跟「帶背刺」「帶背鰭」一樣像）：
     ///   1. 同一頁的每一列都是不同的發現物：別列已經確定的，不會是這一列（同名的一組除外）
     ///   2. 清單照名稱的字元編碼排序時（預設的排序；按 ⇅ 換過排序就不是），這一列一定排在上下已確定的兩列之間
+    ///   3. 清單依價值排列時，這一列的功績一定介於上下已確定的兩列之間（例如上下是北非髯羊 13、摩弗倫羊 12，
+    ///      一個字的只有獾 13 符合；獐 640、豺 59 都不是）
     /// 排除之後只剩一個、或第一名明顯領先，就當成確定。新確定的列可以再幫忙推斷別列，所以最多做 3 輪。
     /// 注意：只排除「這一頁」已確定的，不排除前幾頁對到的（_matched）。捲動時上下頁大部分重疊，
     /// 這一列很可能就是前幾頁已經對到的那一個、只是這次讀錯了；排除它會被推成另一個沒發現的發現物並預設打勾。
     /// </summary>
-    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool sortedByName)
+    private void ResolveWithinPage(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, SortMode mode)
     {
         for (int pass = 0; pass < 3; pass++)
         {
@@ -297,8 +318,15 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 .Where(p => p.Match.IsMatch)
                 .Select(p => (p.Row.Index, Name: NameMatcher.SortKey(p.Match.Item!.Name)))]; // 比較順序用拿掉結尾數字的名稱
             // 這一頁照名稱排序（DetectSort 判斷的），而且新確定的列也沒有違反，才用上下列的順序排除候選
-            bool sorted = sortedByName
+            bool sorted = mode == SortMode.ByName
                           && anchors.Zip(anchors.Skip(1)).All(z => string.CompareOrdinal(z.First.Name, z.Second.Name) <= 0);
+            // 依價值排列時用功績：同名的一組功績各不相同、功績 0（Excel 沒寫）的不知道多少，都不當界線
+            List<(int Index, int Merit)> meritAnchors = [.. picks
+                .Where(p => p.Match.IsMatch && !p.Match.IsVariant && p.Match.Item!.Merit > 0)
+                .Select(p => (p.Row.Index, p.Match.Item!.Merit))];
+            // 依價值排列：每一列用上下最近的已確定列當界線。
+            // 推斷後新確定的列讓界線顛倒（上面的功績比下面低）時，這一列不用功績
+            bool sortedByValue = mode == SortMode.ByValue;
 
             bool changed = false;
             for (int i = 0; i < picks.Count; i++)
@@ -310,16 +338,27 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 }
                 string? lower = sorted ? anchors.Where(a => a.Index < row.Index).Select(a => a.Name).LastOrDefault() : null;
                 string? upper = sorted ? anchors.Where(a => a.Index > row.Index).Select(a => a.Name).FirstOrDefault() : null;
+                int? high = sortedByValue ? meritAnchors.Where(a => a.Index < row.Index).Select(a => (int?)a.Merit).LastOrDefault() : null;
+                int? low = sortedByValue ? meritAnchors.Where(a => a.Index > row.Index).Select(a => (int?)a.Merit).FirstOrDefault() : null;
+                if (high is not null && low is not null && high < low)
+                {
+                    high = null;
+                    low = null;
+                }
+                // 功績在上下兩列之間（相同也算；同名的一組只要其中一個符合；Excel 沒寫功績的不排除）
+                Func<IReadOnlyList<DiscoveryItem>, bool> fitsMerit = g => g.Any(x =>
+                    x.Merit <= 0 || ((high is null || x.Merit <= high) && (low is null || x.Merit >= low)));
 
-                // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、這一頁已確定的排除候選，只剩一個就是它。
-                // 例如昆蟲類一個字的只有「蠶」；量不到字寬時，要照名稱排序而且上下都有確定的列才推斷
+                // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、功績、這一頁已確定的排除候選，只剩一個就是它。
+                // 例如昆蟲類一個字的只有「蠶」；量不到字寬時，要上下都有確定的列（名稱或功績的界線）才推斷
                 if (row.Readings.Count == 0)
                 {
-                    if (row.TextWidth > 0 || (lower is not null && upper is not null))
+                    if (row.TextWidth > 0 || (lower is not null && upper is not null) || (high is not null && low is not null))
                     {
                         List<IReadOnlyList<DiscoveryItem>> between = [.. matcher.Between(category, lower, upper)
                             .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
-                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))];
+                            .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))
+                            .Where(fitsMerit)];
                         if (between.Count == 1)
                         {
                             IReadOnlyList<DiscoveryItem> only = between[0];
@@ -349,6 +388,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     .Where(c => !(c.Items.Count == 1 && claimed.Contains(c.Items[0])))
                     .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), lower) >= 0)
                     .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), upper) <= 0)
+                    .Where(c => fitsMerit(c.Items))
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {
@@ -425,6 +465,9 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     ///   - 證據不足（例如發現物少、這一頁只有一兩個已確定的列，兩種都符合）：沒有矛盾就沿用記住的排序方式
     /// 兩種都符合時不下判斷，免得誤判（列數少時常常兩種都符合）。
     /// 用剛開始玩的玩家模擬過（只有 1%～3% 的發現物）：判斷不出來的時候有，但沒有判斷錯的。
+    /// 遊戲改版有時會調整功績，Excel 不一定跟著改，所以依價值排列的頁面也可能有一處對不上
+    /// （天文的「日落的太白星」165 排在「天爐座」150 後面）。這種超出預期的情況刻意不放寬：
+    /// 判斷成「排序看不出來」、不用功績推斷，讓使用者自己確認，免得推斷錯了還預設打勾。
     /// </summary>
     private SortMode DetectSort(List<(ListRow Row, string Text, MatchResult Match)> picks, bool remember)
     {
@@ -666,9 +709,12 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         return added;
     }
 
-    /// <summary>加入一筆讀到的結果。已經有了就回傳 false。</summary>
+    /// <summary>
+    /// 加入一筆讀到的結果。已經有了就回傳 false。
+    /// 對不到的（找不到、不確定）：note 是位置說明（和讀不出來的一樣，「1 個字，在「A」和「B」之間」），width 是量到的字寬。
+    /// </summary>
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
-        string confidentAbove = "", string confidentBelow = "")
+        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0)
     {
         if (_resolvedKeys.Contains(TextKey(category, screenText)))
         {
@@ -701,7 +747,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             found = new Found
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
-                Above = confidentAbove, Below = confidentBelow,
+                Above = confidentAbove, Below = confidentBelow, Note = note, TextWidth = width,
             };
             _unmatched[key] = found;
         }

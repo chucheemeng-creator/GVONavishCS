@@ -34,6 +34,9 @@ public sealed class Found
     /// </summary>
     public bool ByMerit { get; set; }
 
+    /// <summary>畫面上量到的字寬（遊戲像素，0 表示沒量到）。讀不出來、對不到的列用來在選擇視窗只列出字數對得上的。</summary>
+    public double TextWidth { get; init; }
+
     /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
     public bool Unreadable { get; init; }
 
@@ -58,7 +61,15 @@ public sealed class Found
     public string Above { get; init; } = "";
     public string Below { get; init; } = "";
 
-    public DiscoveryItem? Item => Assigned ?? Match.Item;
+    /// <remarks>
+    /// 不確定的列（好幾個名稱一樣像，例如「天座」之於天兔座、天貓座、天鵝座……）不給答案：
+    /// 列出最像的第一個只是剛好排在前面，容易誤導（看起來像程式的判斷，打勾就寫進 Excel），要使用者自己指定。
+    /// 同名的一組不在此限（組裡是哪一個另外處理）。
+    /// </remarks>
+    public DiscoveryItem? Item => Assigned ?? (Match.Ambiguous && !Match.IsVariant ? null : Match.Item);
+
+    /// <summary>不確定、還沒指定的列（好幾個名稱一樣像，不給答案）。</summary>
+    public bool Undecided => Assigned is null && Match.Ambiguous && !Match.IsVariant && !Unreadable;
 
     /// <summary>要使用者確認的（同名分不出是哪一個、不確定、用排序推斷的）；手動指定的已經確認過。</summary>
     public bool NeedsConfirm => !Manual && (VariantUnsure || Match.Ambiguous || Match.Score == 0);

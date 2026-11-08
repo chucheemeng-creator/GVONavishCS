@@ -36,6 +36,12 @@ public sealed class ItemPickerForm : Form
     // 讀到這一列時，那一頁是依價值排列：功績範圍才有意義（依名稱排列時功績是亂的）
     private readonly bool _pageByValue;
 
+    // 讀不出來的列量到的字寬（遊戲像素，0 表示沒量到）：沒有搜尋時只列出字數對得上的
+    private readonly double _textWidth;
+
+    // 目前遊戲畫面上的發現物：字數不同也列出來，對照遊戲畫面看位置
+    private readonly IReadOnlySet<DiscoveryItem> _onScreen;
+
     // 這一列目前對到（或推斷出來）的發現物：開啟時捲到它、預先選好，確認無誤直接按確定
     private readonly DiscoveryItem? _current;
 
@@ -50,9 +56,11 @@ public sealed class ItemPickerForm : Form
 
     public ItemPickerForm(DiscoveryBook book, string category, string screenText, int character,
         IReadOnlySet<DiscoveryItem> onList, string above = "", string below = "", bool pageByValue = false,
-        DiscoveryItem? current = null)
+        DiscoveryItem? current = null, double textWidth = 0, IReadOnlySet<DiscoveryItem>? onScreen = null)
     {
         _pageByValue = pageByValue;
+        _textWidth = textWidth;
+        _onScreen = onScreen ?? new HashSet<DiscoveryItem>();
         _current = current;
         _book = book;
         _screenText = screenText;
@@ -84,7 +92,10 @@ public sealed class ItemPickerForm : Form
         top.Controls.Add(MakeLabel("畫面上讀到："), 0, 0);
         top.Controls.Add(new Label
         {
-            Text = screenText == "" ? "（讀不出來）" : screenText,
+            Text = (screenText == "" ? "（讀不出來）" : screenText)
+                   + (textWidth > 0
+                       ? $"　{Math.Round((textWidth + 2) / NameMatcher.FullWidthCharPixels)} 個字（只列出字數相同的和目前畫面上的；打字搜尋可以找全部）"
+                       : ""),
             AutoSize = true,
             Margin = new Padding(0, 6, 0, 0),
             Font = new Font(Font, FontStyle.Bold),
@@ -161,6 +172,12 @@ public sealed class ItemPickerForm : Form
         List<(DiscoveryItem Item, double Score)> rows = [];
         foreach (DiscoveryItem item in items)
         {
+            // 字數對不上、也不在目前畫面上（上下兩列也算）的不列出；搜尋時不限制，萬一字寬量錯還找得到
+            if (search == "" && _textWidth > 0 && !NameMatcher.FitsWidth(item.Name, _textWidth)
+                && !_onScreen.Contains(item) && item.Name != _above && item.Name != _below)
+            {
+                continue;
+            }
             string name = NameMatcher.Normalize(item.Name);
             double score;
             if (search != "")
@@ -203,6 +220,10 @@ public sealed class ItemPickerForm : Form
         }
         // 上下兩列都知道才標粗體：只知道一邊時範圍是「比上一列低的全部」，會有半張表是粗體，沒有意義
         bool hasRange = excelOrder && _pageByValue && aboveIndex >= 0 && belowIndex >= 0;
+        // 只列出字數對得上的時候，清單上的位置和 Excel 裡的位置不同：
+        // Shown(i) 是清單上排在 Excel 第 i 個之前的有幾列（也就是第 i 個之後第一列在清單上的位置）
+        Dictionary<DiscoveryItem, int> position = items.Select((item, i) => (item, i)).ToDictionary(p => p.item, p => p.i);
+        int Shown(int itemIndex) => rows.Count(r => position[r.Item] < itemIndex);
         IEnumerable<(DiscoveryItem Item, double Score)> ordered = excelOrder
             ? rows
             : rows.OrderByDescending(r => r.Score).ThenBy(r => r.Item.Name, StringComparer.Ordinal).Take(MaxRows);
@@ -211,7 +232,7 @@ public sealed class ItemPickerForm : Form
         _list.Items.Clear();
         int index = 0;
         int nearest = -1; // 離上一列（沒有的話下一列）最近的候選
-        int anchor = aboveIndex >= 0 ? aboveIndex : belowIndex;
+        int anchor = aboveIndex >= 0 ? Shown(aboveIndex) : belowIndex >= 0 ? Shown(belowIndex) : -1;
         int currentIndex = -1;
         foreach ((DiscoveryItem item, double score) in ordered)
         {
@@ -267,11 +288,11 @@ public sealed class ItemPickerForm : Form
             }
             else if (excelOrder && aboveIndex >= 0)
             {
-                target = Math.Min(aboveIndex + 1, _list.Items.Count - 1);
+                target = Math.Min(Shown(aboveIndex + 1), _list.Items.Count - 1);
             }
-            else if (excelOrder && belowIndex > 0)
+            else if (excelOrder && belowIndex >= 0 && Shown(belowIndex) > 0)
             {
-                target = belowIndex - 1;
+                target = Shown(belowIndex) - 1;
             }
             if (excelOrder)
             {
