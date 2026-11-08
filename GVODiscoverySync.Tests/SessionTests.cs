@@ -168,6 +168,80 @@ public class SessionTests
         Assert.Equal($"1 個字，在「{above}」和「{below}」之間", f.Note);
     }
 
+    // 昆蟲依名稱排列、「蠶」那一列讀不出來的一頁（蠶用字數推斷出來）
+    private static List<ListRow> SilkwormPage(bool readable = false)
+    {
+        List<DiscoveryItem> order = ByName("昆蟲");
+        int at = order.FindIndex(i => i.Name == "蠶");
+        int start = Math.Max(0, at - 5);
+        List<ListRow> page = Page(order, start);
+        return readable ? page : Replace(page, at - start, Misread(at - start, "", TestBook.GameWidth("蠶")));
+    }
+
+    [Fact]
+    public void 推斷出來的列記得位置和字寬()
+    {
+        DiscoverySession session = NewSession();
+        session.AddPage("昆蟲", SilkwormPage());
+        Found silkworm = MatchedOf(session, "蠶");
+        Assert.NotEqual("", silkworm.Above); // 指定視窗要用：上下列、字寬
+        Assert.NotEqual("", silkworm.Below);
+        Assert.Equal(TestBook.GameWidth("蠶"), silkworm.TextWidth);
+    }
+
+    [Fact]
+    public void 推斷出來的列移除後_同分類其他推斷的列不受影響()
+    {
+        DiscoverySession session = NewSession();
+        session.AddPage("昆蟲", SilkwormPage());
+        session.Remove(MatchedOf(session, "蠶"));
+
+        // 同一個位置再讀到：不加回來
+        session.AddPage("昆蟲", SilkwormPage());
+        Assert.DoesNotContain(session.All, f => f.Item?.Name == "蠶");
+
+        // 同分類另一頁、另一列讀不出來：照樣推斷（以前移除「蠶」會記下空白文字，擋掉這個分類所有推斷出來的列）
+        List<DiscoveryItem> order = ByName("昆蟲");
+        int k = Enumerable.Range(1, order.Count - 2).First(j =>
+            order[j].Name != "蠶"
+            && TestBook.Matcher.Between("昆蟲", NameMatcher.SortKey(order[j - 1].Name), NameMatcher.SortKey(order[j + 1].Name))
+                .Count(g => NameMatcher.FitsWidth(g, TestBook.GameWidth(order[j].Name))) == 1
+            && Math.Abs(j - order.FindIndex(i => i.Name == "蠶")) > 10);
+        int start = Math.Max(0, Math.Min(k - 5, order.Count - 10));
+        session.AddPage("昆蟲", Replace(Page(order, start), k - start, Misread(k - start, "", TestBook.GameWidth(order[k].Name))));
+        Assert.Equal(0, MatchedOf(session, order[k].Name).Match.Score);
+    }
+
+    [Fact]
+    public void 推斷出來的列之後讀到字_換成讀到的結果()
+    {
+        DiscoverySession session = NewSession();
+        List<Found> updated = [];
+        session.Updated = (f, _) => updated.Add(f);
+        session.AddPage("昆蟲", SilkwormPage());
+        Found silkworm = MatchedOf(session, "蠶");
+        Assert.True(silkworm.NeedsConfirm);
+
+        session.AddPage("昆蟲", SilkwormPage(readable: true)); // 這次讀到「蠶」了
+        Assert.Same(silkworm, MatchedOf(session, "蠶"));
+        Assert.Equal("蠶", silkworm.ScreenText);
+        Assert.Equal(1, silkworm.Match.Score);
+        Assert.False(silkworm.NeedsConfirm); // 變成「新增」
+        Assert.Contains(silkworm, updated);
+    }
+
+    [Fact]
+    public void 不確定時最像的剛好是同名的一組_也不列出猜的名稱()
+    {
+        // 「水鹿」完全一樣，但畫面上是三個字寬：不確定。最像的是同名的一組（水鹿、水鹿2），也不給答案
+        DiscoverySession session = NewSession();
+        session.AddPage("大型生物", [Misread(0, "水鹿", TestBook.GameWidth("三個字"))]);
+        Found f = Assert.Single(session.All);
+        Assert.True(f.Match.IsVariant);
+        Assert.True(f.Undecided);
+        Assert.Null(f.Item);
+    }
+
     [Fact]
     public void 找不到的列也說明有幾個字和位置()
     {
