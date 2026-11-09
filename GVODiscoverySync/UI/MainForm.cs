@@ -716,7 +716,12 @@ public sealed class MainForm : Form
         HashSet<DiscoveryItem> onList = [.. _session.Matched.Keys.Where(k => _session.Matched[k] != f),
             .. _session.Unmatched.Values.Where(u => u != f && u.Item is not null && ViewOf(u) is { Checked: true }).Select(u => u.Item!)];
         DiscoveryItem item;
-        using (ItemPickerForm dlg = new(_session.Book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue, f.Item))
+        // 主視窗置頂（F1）時，選擇視窗也要置頂，不然會被主視窗蓋住、無法操作
+        using (ItemPickerForm dlg = new(_session.Book, f.Category, screen, Character, onList, f.Above, f.Below, f.PageByValue, f.Item,
+                   f.TextWidth, _session.LastPage)
+               {
+                   TopMost = TopMost,
+               })
         {
             if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem is not DiscoveryItem picked)
             {
@@ -861,6 +866,13 @@ public sealed class MainForm : Form
         {
             status = "讀不出來，請手動確認";
             color = UiColors.PickForList(Color.Firebrick, Color.FromArgb(255, 140, 110));
+            check = false;
+        }
+        else if (f.Undecided)
+        {
+            // 好幾個名稱一樣像：不列出猜的名稱（容易誤導），請使用者自己指定
+            status = "不確定，請手動指定";
+            color = UiColors.PickForList(Color.DarkOrange, Color.Orange);
             check = false;
         }
         else if (f.Item is null)
@@ -1133,8 +1145,9 @@ public sealed class MainForm : Form
         // 新增＝勾選了、會寫入 Excel 的（「不確定」「推斷」的列自己確認後打勾，也算新增）；
         // 不確定＝需要確認、還沒勾的
         int newCount = all.Count(f => f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is { Checked: true });
-        int unsure = all.Count(f => f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is not { Checked: true } && f.NeedsConfirm);
-        int missing = all.Count(f => f.Item is null);
+        int unsure = all.Count(f => (f.Item is not null && !f.Item.Marked[character] && ViewOf(f) is not { Checked: true } && f.NeedsConfirm)
+                                    || f.Undecided);
+        int missing = all.Count(f => f.Item is null && !f.Undecided);
         _lblSummary.Text = $"新增 {newCount}　已經打勾 {already}　不確定 {unsure}　找不到 {missing}";
     }
 

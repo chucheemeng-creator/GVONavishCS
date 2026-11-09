@@ -102,6 +102,18 @@ public class SessionTests
         Assert.Empty(session.All);
     }
 
+    [Fact]
+    public void 記得目前畫面上的發現物()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("植物");
+        session.AddPage("植物", Page(order, 0));
+        session.AddPage("植物", Page(order, 10));
+        Assert.True(session.LastPage.SetEquals(order.Skip(10).Take(10))); // 只有最近一頁的
+        session.Clear();
+        Assert.Empty(session.LastPage);
+    }
+
     // ── 重複讀取 ──
 
     [Fact]
@@ -140,6 +152,93 @@ public class SessionTests
         Assert.Equal(0, silkworm.Match.Score); // 推斷出來的
         Assert.True(silkworm.NeedsConfirm); // 推斷的要使用者確認
         Assert.Empty(session.Unmatched);
+    }
+
+    [Fact]
+    public void 讀不出來的列說明有幾個字()
+    {
+        // 依價值排列的一頁，中間一列讀不出來、推斷不出來：說明寫出字數和位置
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByValue("中型生物");
+        List<ListRow> page = Page(order, 20);
+        string above = page[4].Text, below = page[6].Text;
+        session.AddPage("中型生物", Replace(page, 5, Misread(5, "", 14))); // 一個字寬
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.True(f.Unreadable);
+        Assert.Equal($"1 個字，在「{above}」和「{below}」之間", f.Note);
+    }
+
+    [Fact]
+    public void 找不到的列也說明有幾個字和位置()
+    {
+        DiscoverySession session = NewSession();
+        List<ListRow> page = Page(ByName("植物"), 30);
+        string above = page[4].Text, below = page[6].Text;
+        session.AddPage("植物", Replace(page, 5, Misread(5, "囗囗囗", 46))); // 讀成亂碼、三個字寬
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.Null(f.Item);
+        Assert.Equal($"3 個字，在「{above}」和「{below}」之間", f.Note);
+        Assert.Equal(46, f.TextWidth);
+    }
+
+    [Fact]
+    public void 依價值排列時讀不出來的一個字用功績推斷()
+    {
+        // 中型生物一個字的有獐 640、豺 59、獾 13。依價值排列，獾的上下是鬣狗 24、北非髯羊 13：只有獾符合
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByValue("中型生物");
+        int at = order.FindIndex(i => i.Name == "獾");
+        int start = at - 6;
+        session.AddPage("中型生物", Replace(Page(order, start), 6, Misread(6, "", TestBook.GameWidth("獾"))));
+
+        Found badger = MatchedOf(session, "獾");
+        Assert.Equal(0, badger.Match.Score); // 推斷出來的，要使用者確認
+        Assert.True(badger.NeedsConfirm);
+        Assert.Empty(session.Unmatched);
+    }
+
+    [Fact]
+    public void 功績和Excel對不上時不推斷_也不列出猜的名稱()
+    {
+        // 實際的一頁（天文，依價值排列）：「天鵝座」漏讀成「天座」，三個字的「天○座」有十幾個一樣像。
+        // 遊戲改版調整過功績、Excel 沒跟上：日落的太白星 165 排在天爐座 150 後面。
+        // 這種超出預期的情況不推斷（排序看不出來），也不列出「最像的第一個」（以前會列出功績 1330 的天兔座），
+        // 讓使用者自己指定
+        string[] names = ["處女座的漩渦星雲", "天龍座的貓眼狀星雲", "天鷹座", "大熊座之圓形星雲", "小麥哲倫星雲",
+            "水委一", "天鵝座", "金星的圓缺", "天爐座", "日落的太白星"];
+        List<ListRow> page = [.. names.Select((n, i) => Row(i, n))];
+        page = Replace(page, 6, Misread(6, "天座", TestBook.GameWidth("天鵝座")));
+
+        DiscoverySession session = NewSession();
+        PageResult result = session.AddPage("天文", page);
+        Assert.Equal(SortMode.Unknown, result.PageSort);
+        Found f = Assert.Single(session.Unmatched.Values);
+        Assert.True(f.Undecided);
+        Assert.Null(f.Item); // 不給答案，打勾也不會寫入
+        Assert.Equal("3 個字，在「水委一」和「金星的圓缺」之間", f.Note);
+        Assert.DoesNotContain(session.All, x => x.Item?.Name == "天兔座");
+    }
+
+    [Fact]
+    public void 依價值排列時功績界線也用在讀錯的列()
+    {
+        // 「帶背的飛龍骨架」：帶背刺、帶背鰭一樣像。依價值排列時，只有功績在上下兩列之間的那一個可能
+        DiscoveryItem spine = Items("化石").Single(i => i.Name == "帶背刺的飛龍骨架");
+        DiscoveryItem fin = Items("化石").Single(i => i.Name == "帶背鰭的飛龍骨架");
+        Assert.NotEqual(spine.Merit, fin.Merit);
+        DiscoveryItem target = spine.Merit > fin.Merit ? fin : spine; // 讓功績較低的那一個當答案
+        List<DiscoveryItem> order = ByValue("化石");
+        int at = order.IndexOf(target);
+        int start = Math.Max(0, Math.Min(at - 5, order.Count - 10));
+        List<ListRow> page = Page(order, start);
+        int row = at - start;
+        // 另一個（功績較高的）不在這一頁上的話，才是只靠功績分辨
+        DiscoveryItem other = target == fin ? spine : fin;
+        Assert.DoesNotContain(page, r => r.Text == other.Name);
+
+        DiscoverySession session = NewSession();
+        session.AddPage("化石", Replace(page, row, Misread(row, "帶背的飛龍骨架", TestBook.GameWidth(target.Name))));
+        Assert.True(MatchedOf(session, target.Name).Match.IsMatch);
     }
 
     [Fact]
@@ -322,6 +421,60 @@ public class SessionTests
         session.AddPage("美術品", page);
         Assert.True(one.VariantUnsure);
         Assert.Single(session.All, f => f.Match.IsVariant);
+    }
+
+    [Fact]
+    public void 同名的列改指定到組外_再移除()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("美術品", keep: "聖母加冠");
+        int at = order.FindIndex(i => NameMatcher.SortKey(i.Name) == "聖母加冠");
+        List<ListRow> page = Page(order, at - 4);
+        session.AddPage("美術品", page);
+        Found one = MatchedOf(session, "聖母加冠1");
+        Found two = MatchedOf(session, "聖母加冠2");
+
+        // 第二列其實是別的發現物：改指定到組外。組裡扣掉一個，剩下的分不出是哪一個，改回請確認
+        DiscoveryItem outside = order[0]; // 不在這一頁上
+        Assert.Null(session.Assign(two, outside));
+        Assert.True(two.VariantSuppressed);
+        Assert.Same(two, session.Matched[outside]);
+        Assert.True(one.VariantUnsure);
+
+        // 再移除同一筆：已經扣過，不會再扣（狀態不變）
+        session.Remove(two);
+        Assert.True(two.VariantSuppressed);
+        Assert.True(one.VariantUnsure);
+        Assert.False(session.Matched.ContainsKey(outside));
+
+        // 再讀同一頁：移除的那一列不加回來，剩下的仍然請確認
+        session.AddPage("美術品", page);
+        Assert.Single(session.All, f => f.Match.IsVariant);
+        Assert.True(one.VariantUnsure);
+    }
+
+    [Fact]
+    public void 同名的列改指定到組外_又改回組內()
+    {
+        DiscoverySession session = NewSession();
+        List<DiscoveryItem> order = ByName("美術品", keep: "聖母加冠");
+        int at = order.FindIndex(i => NameMatcher.SortKey(i.Name) == "聖母加冠");
+        List<ListRow> page = Page(order, at - 4);
+        session.AddPage("美術品", page);
+        Found one = MatchedOf(session, "聖母加冠1");
+        Found two = MatchedOf(session, "聖母加冠2");
+
+        session.Assign(two, order[0]); // 改到組外：扣一個
+        Assert.True(one.VariantUnsure);
+
+        DiscoveryItem back = TestBook.Book.Categories["美術品"].Single(i => i.Name == "聖母加冠2");
+        Assert.Null(session.Assign(two, back)); // 改回組內：扣回來
+        Assert.False(two.VariantSuppressed);
+
+        // 再讀同一頁：兩個又同時看到，整組湊齊，剩下的那一筆確定
+        session.AddPage("美術品", page);
+        Assert.False(one.VariantUnsure);
+        Assert.Equal(2, session.All.Count(f => f.Match.IsVariant));
     }
 
     [Fact]
