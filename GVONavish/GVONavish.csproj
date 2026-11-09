@@ -11,6 +11,8 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>GVONavish</AssemblyName>
     <RootNamespace>GVONavish</RootNamespace>
+    <!-- exe 檔、工作列、檔案總管顯示的圖示 -->
+    <ApplicationIcon>GVONavish.ico</ApplicationIcon>
     <!-- 讓這個專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
@@ -18,6 +20,11 @@
   <ItemGroup>
     <!-- 找遊戲視窗、截圖、安全存檔等共用的部分 -->
     <ProjectReference Include="..\GVO.Common\GVO.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 視窗左上角的圖示從這裡讀（MainForm.LoadAppIcon） -->
+    <EmbeddedResource Include="GVONavish.ico" LogicalName="GVONavish.ico" />
   </ItemGroup>
 
   <ItemGroup>
