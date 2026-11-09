@@ -166,7 +166,7 @@ public class MainForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         KeyPreview = true;
-        Icon = SystemIcons.Application;
+        Icon = LoadAppIcon() ?? SystemIcons.Application;
 
         _mapView.Dock = DockStyle.Fill;
         _mapView.Routes = _routes;
@@ -324,6 +324,15 @@ public class MainForm : Form
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// 程式圖示（內嵌在程式裡的 GVONavish.ico，和 exe 檔的圖示是同一個檔案）。讀不到時回傳 null。
+    /// </summary>
+    private static Icon? LoadAppIcon()
+    {
+        using Stream? stream = typeof(MainForm).Assembly.GetManifestResourceStream("GVONavish.ico");
+        return stream is null ? null : new Icon(stream);
     }
 
     #endregion
