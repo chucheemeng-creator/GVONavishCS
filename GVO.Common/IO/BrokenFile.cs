@@ -13,14 +13,20 @@ namespace GVO.Common.IO;
 public static class BrokenFile
 {
     /// <summary>
-    /// 把讀不出來的檔案改名為「原檔名.broken-日期時間」。
+    /// 把讀不出來的檔案改名為「原檔名.broken-日期時間」（同一秒內重複時加上 -2、-3……）。
     /// 成功時回傳新檔名；失敗（例如檔案被鎖住）回傳 null，這時呼叫端不可以覆蓋原檔。
     /// </summary>
     public static string? Preserve(string path)
     {
         try
         {
-            string backup = $"{path}.broken-{DateTime.Now:yyyyMMdd-HHmmss}";
+            // 同一秒內已經有同名的備份時加上 -2、-3……（不然 File.Move 會失敗，被誤當成「檔案被鎖住」而停用存檔）
+            string stem = $"{path}.broken-{DateTime.Now:yyyyMMdd-HHmmss}";
+            string backup = stem;
+            for (int n = 2; File.Exists(backup); n++)
+            {
+                backup = $"{stem}-{n}";
+            }
             File.Move(path, backup);
             return backup;
         }
