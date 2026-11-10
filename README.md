@@ -6,6 +6,8 @@
 
 下載：請到 [Releases](../../releases) 下載最新版本。
 
+有問題、建議或使用心得：請到 [Discussions（討論區）](../../discussions) 發文；確定是程式錯誤的話請開 [Issue](../../issues)。
+
 ---
 
 ## 功能
