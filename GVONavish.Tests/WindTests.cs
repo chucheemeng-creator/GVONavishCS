@@ -90,20 +90,20 @@ public class WindTests : IDisposable
     {
         WindMap wind = TwoAreas(90, 270, 0, 180);
         Assert.Equal(2, wind.AreaCount);
-        Assert.Equal(90.0, wind.DirectionAt(100, 4000, Season.Summer), 6);
-        Assert.Equal(270.0, wind.DirectionAt(100, 4000, Season.Winter), 6);
-        Assert.Equal(0.0, wind.DirectionAt(10000, 4000, Season.Summer), 6);
-        Assert.Equal(180.0, wind.DirectionAt(10000, 4000, Season.Winter), 6);
+        Assert.Equal(90.0, wind.DirectionAt(100, 4000, Season.Summer)!.Value, 6);
+        Assert.Equal(270.0, wind.DirectionAt(100, 4000, Season.Winter)!.Value, 6);
+        Assert.Equal(0.0, wind.DirectionAt(10000, 4000, Season.Summer)!.Value, 6);
+        Assert.Equal(180.0, wind.DirectionAt(10000, 4000, Season.Winter)!.Value, 6);
     }
 
     [Fact]
     public void 風向檔_X超出地圖會折回來()
     {
         WindMap wind = TwoAreas(90, 270, 0, 180);
-        Assert.Equal(90.0, wind.DirectionAt(World.Width + 100, 4000, Season.Summer), 6); // 攤開的座標
-        Assert.Equal(0.0, wind.DirectionAt(-100, 4000, Season.Summer), 6);
-        Assert.Equal(90.0, wind.DirectionAt(100, -50, Season.Summer), 6);                // Y 超出範圍算最近的一格
-        Assert.Equal(90.0, wind.DirectionAt(100, 99999, Season.Summer), 6);
+        Assert.Equal(90.0, wind.DirectionAt(World.Width + 100, 4000, Season.Summer)!.Value, 6); // 攤開的座標
+        Assert.Equal(0.0, wind.DirectionAt(-100, 4000, Season.Summer)!.Value, 6);
+        Assert.Equal(90.0, wind.DirectionAt(100, -50, Season.Summer)!.Value, 6);                // Y 超出範圍算最近的一格
+        Assert.Equal(90.0, wind.DirectionAt(100, 99999, Season.Summer)!.Value, 6);
     }
 
     [Fact]
@@ -123,6 +123,9 @@ public class WindTests : IDisposable
         WriteFile(2, 1, [(90, 270), (0, 180)], [0, 2]);
         Assert.Null(WindMap.Load(_file));                              // 格子指到不存在的海域
 
+        WriteFile(1, 1, new (int, int)[255], [0]);
+        Assert.Null(WindMap.Load(_file));                              // 海域太多（255 留給「不處理風向」）
+
         WriteFile(2, 1, [(90, 270), (0, 180)], [0]);
         Assert.Null(WindMap.Load(_file));                              // 格子資料不夠
 
@@ -134,17 +137,34 @@ public class WindTests : IDisposable
     }
 
     [Fact]
+    public void 風向檔_不處理風向的地方_回傳null()
+    {
+        WriteFile(2, 1, [(90, 270)], [0, 255]);
+        WindMap wind = WindMap.Load(_file)!;
+        Assert.Equal(90.0, wind.DirectionAt(100, 4000, Season.Summer)!.Value, 6);
+        Assert.Null(wind.DirectionAt(10000, 4000, Season.Summer));
+        Assert.Null(wind.DirectionAt(10000, 4000, Season.Winter));
+    }
+
+    [Fact]
     public void 附帶的風向檔_讀得出來_幾個海域的風向合理()
     {
         WindMap wind = TestFiles.WindMap;
         Assert.InRange(wind.AreaCount, 100, 130);
 
         // 加勒比海：東北信風，兩季都往西吹
-        Assert.InRange(wind.DirectionAt(13300, 4100, Season.Summer), 225.0, 315.0);
-        Assert.InRange(wind.DirectionAt(13300, 4100, Season.Winter), 225.0, 315.0);
+        Assert.InRange(wind.DirectionAt(13300, 4100, Season.Summer)!.Value, 225.0, 315.0);
+        Assert.InRange(wind.DirectionAt(13300, 4100, Season.Winter)!.Value, 225.0, 315.0);
         // 北大西洋中緯度：西風帶，兩季都往東吹
-        Assert.InRange(wind.DirectionAt(14500, 2700, Season.Summer), 45.0, 135.0);
-        Assert.InRange(wind.DirectionAt(14500, 2700, Season.Winter), 45.0, 135.0);
+        Assert.InRange(wind.DirectionAt(14500, 2700, Season.Summer)!.Value, 45.0, 135.0);
+        Assert.InRange(wind.DirectionAt(14500, 2700, Season.Winter)!.Value, 45.0, 135.0);
+
+        // 地中海、黑海、伊比利半島外海：地圖上沒有標風向，不處理
+        Assert.Null(wind.DirectionAt(400, 3200, Season.Summer));     // 地中海中部
+        Assert.Null(wind.DirectionAt(1500, 2900, Season.Winter));    // 黑海
+        Assert.Null(wind.DirectionAt(15700, 3250, Season.Summer));   // 里斯本外海
+        Assert.NotNull(wind.DirectionAt(1800, 4000, Season.Summer)); // 紅海有標
+        Assert.NotNull(wind.DirectionAt(15900, 2800, Season.Summer)); // 比斯開灣有標
     }
 
     // ---- 規劃航線上的逆風 ----
@@ -182,6 +202,17 @@ public class WindTests : IDisposable
         Assert.Single(route.HeadwindRuns);
         Assert.InRange(route.HeadwindRuns[0].From.X, 8184.0, 8200.0);
         Assert.Equal(8400.0, route.HeadwindRuns[0].To.X, 6);
+    }
+
+    [Fact]
+    public void 航線_經過不處理風向的地方_不算逆風()
+    {
+        // 左半邊風往西吹，右半邊不處理風向；航線從 8000 往東走到 8400
+        WriteFile(2, 1, [(270, 270)], [0, 255]);
+        WindMap wind = WindMap.Load(_file)!;
+        RouteWind route = new([Leg((8000, 4000), (8400, 4000))], wind, Season.Summer);
+        Assert.InRange(route.HeadwindLength, 184.0, 200.0);            // 只有 8000 ~ 8192 是逆風
+        Assert.Equal(route.HeadwindLength / 0.72 + (400 - route.HeadwindLength), route.EffectiveLength, 6);
     }
 
     [Fact]

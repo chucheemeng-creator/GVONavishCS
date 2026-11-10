@@ -60,7 +60,10 @@ public sealed class RouteWind
         {
             double f0 = (double)k / pieces, f1 = (double)(k + 1) / pieces, mid = (f0 + f1) / 2;
             double piece = length / pieces;
-            WindSide side = Sail.Classify(heading, wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season));
+            // 不處理風向的地方（地中海、黑海…）當成側風：不算逆風，船速不變
+            WindSide side = wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season) is double windTo
+                ? Sail.Classify(heading, windTo)
+                : WindSide.Side;
             bool head = side == WindSide.Head;
 
             _along.Add(_along[^1] + piece);

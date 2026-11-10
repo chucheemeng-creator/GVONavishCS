@@ -1241,15 +1241,17 @@ public class MainForm : Form
 
     /// <summary>
     /// 船現在的船速，是不是逆風時的幾成（縱帆逆風 0.72，其他 1）。
-    /// 用船現在的航向和所在海域在選定季節的風向判斷；不知道航向或沒有風向資料時當成 1。
+    /// 用船現在的航向和所在海域在選定季節的風向判斷；不知道航向、沒有風向資料、
+    /// 或船在不處理風向的地方（地中海、黑海…）時當成 1。
     /// </summary>
     private double CurrentWindSpeedRatio()
     {
-        if (_wind is null || _motion.HeadingDegrees is not double heading || _mapView.ShipPosition is not WorldPoint ship)
+        if (_wind is null || _motion.HeadingDegrees is not double heading || _mapView.ShipPosition is not WorldPoint ship
+            || _wind.DirectionAt(ship.X, ship.Y, _season) is not double windTo)
         {
             return 1.0;
         }
-        return Sail.ForeAndAftSpeed(Sail.Classify(heading, _wind.DirectionAt(ship.X, ship.Y, _season)));
+        return Sail.ForeAndAftSpeed(Sail.Classify(heading, windTo));
     }
 
     private static string FormatDuration(double seconds)

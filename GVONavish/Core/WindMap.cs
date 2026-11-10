@@ -4,12 +4,14 @@
 // 資料檔 winds.bin：從安瑟兒的中文地圖（2023-07-03 版）整理出來的。
 //   地圖上每個海域有一紅一藍兩個箭頭，紅色是夏季的風向、藍色是冬季的風向，
 //   箭頭指的是「風吹過去的方向」（例如加勒比海是往西：東北信風）。
+//   地中海、黑海和伊比利半島外海，地圖上沒有標風向（在裡面航行本來就沒辦法繞開），
+//   這些地方不處理風向：DirectionAt 回傳 null。
 //
 // 檔案格式：
 //   8 位元組    "GVOWIND1"
 //   int × 3     格子的寬、高、海域數
 //   每個海域    ushort × 4：箭頭的位置 X、Y（世界座標）、夏季風向、冬季風向（度）
-//   其餘        GZip 壓縮的格子資料：每格 1 位元組，寫的是這一格屬於第幾個海域
+//   其餘        GZip 壓縮的格子資料：每格 1 位元組，寫的是這一格屬於第幾個海域；255 表示不處理風向
 //
 // 風向的角度和航向一樣：0 = 往北，90 = 往東，順時針。
 
@@ -36,7 +38,10 @@ public sealed class WindMap
 
     // 檔案裡的大小要在這個範圍內：超出的不是這個程式用的檔案
     private const int MaxGridSide = 4096;
-    private const int MaxAreas = 255;
+    private const int MaxAreas = 254;
+
+    /// <summary>格子資料裡表示「這裡不處理風向」的值。</summary>
+    private const byte NoWind = 255;
 
     private readonly int _width, _height;
     private readonly byte[] _areaOfCell;      // 每一格屬於哪個海域
@@ -56,16 +61,18 @@ public sealed class WindMap
 
     /// <summary>
     /// 這個位置的風吹往哪個方向（度：0 = 往北，90 = 往東，順時針）。
+    /// 不處理風向的地方（地中海、黑海…）回傳 null。
     /// X 超出地圖會折回來（地圖左右相連），Y 超出範圍算最靠近的那一格。
     /// </summary>
-    public double DirectionAt(double worldX, double worldY, Season season)
+    public double? DirectionAt(double worldX, double worldY, Season season)
     {
         int area = AreaAt(worldX, worldY);
+        if (area == NoWind) return null;
         return season == Season.Summer ? _summer[area] : _winter[area];
     }
 
-    /// <summary>這個位置屬於第幾個海域（0 開始）。同一個海域的風向相同。</summary>
-    public int AreaAt(double worldX, double worldY)
+    // 這個位置屬於第幾個海域（0 開始）；NoWind 表示不處理風向
+    private int AreaAt(double worldX, double worldY)
     {
         int cx = (int)(World.WrapX(worldX) * _width / World.Width);
         int cy = (int)(worldY * _height / World.Height);
@@ -105,7 +112,7 @@ public sealed class WindMap
             if (gz.ReadByte() != -1) return null; // 資料比宣告的大小還多
             foreach (byte c in cells)
             {
-                if (c >= areas) return null;
+                if (c >= areas && c != NoWind) return null;
             }
             return new WindMap(width, height, cells, summer, winter);
         }
