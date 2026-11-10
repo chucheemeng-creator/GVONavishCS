@@ -3,5 +3,6 @@
   <Project Path="GVONavish/GVONavish.csproj" />
   <Project Path="GVODiscoverySync/GVODiscoverySync.csproj" />
   <Project Path="GVO.Common/GVO.Common.csproj" />
+  <Project Path="GVONavish.Tests/GVONavish.Tests.csproj" />
   <Project Path="GVODiscoverySync.Tests/GVODiscoverySync.Tests.csproj" />
 </Solution>

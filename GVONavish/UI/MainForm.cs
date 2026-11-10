@@ -89,6 +89,7 @@ public class MainForm : Form
     private bool _planning;                  // 正在規劃中（避免同時按兩次）
     private readonly System.Collections.Generic.List<PlannedRoute> _legs =
         new System.Collections.Generic.List<PlannedRoute>(); // 規劃航線的每一段
+    private double? _planAlong;       // 船在規劃航線上走到哪裡了（RouteProgress.Along）；航線改了就清掉
     private ToolStripMenuItem _miPlanUndo = null!;
 
     /// <summary>規劃航線時，離港口這麼近就自動對準港口；座標標籤也用這個距離註明「附近」的港口（世界座標單位）。</summary>
@@ -578,6 +579,7 @@ public class MainForm : Form
         _routes.CloseCurrent();
         _filter.Reset();
         _speed.Reset();
+        _planAlong = null; // 換了一個角色，規劃航線上的進度重新算
         _lastReadTime = 0; // 下一個位置當成第一次讀到，航向從那裡重新推算
     }
 
@@ -930,6 +932,7 @@ public class MainForm : Form
     {
         if (_legs.Count == 0) return;
         _legs.RemoveAt(_legs.Count - 1);
+        _planAlong = null;
         _mapView.Invalidate();
         UpdateTitleAndStatus();
     }
@@ -1056,6 +1059,7 @@ public class MainForm : Form
                 route.EndName = endName;
                 if (!append) _legs.Clear();
                 _legs.Add(route);
+                _planAlong = null;
                 RememberPort(startName);
                 RememberPort(endName);
                 _mapView.Invalidate();
@@ -1077,6 +1081,7 @@ public class MainForm : Form
     private void ClearPlannedRoute()
     {
         _legs.Clear();
+        _planAlong = null;
         _mapView.Invalidate();
         UpdateTitleAndStatus();
     }
@@ -1115,6 +1120,7 @@ public class MainForm : Form
         }
         _routes.AddFinished(route);
         _legs.Clear();
+        _planAlong = null;
         _mapView.Invalidate();
         UpdateTitleAndStatus();
         ShowRouteManager();
@@ -1128,7 +1134,9 @@ public class MainForm : Form
         return new WorldPoint((int)Math.Round(World.WrapX(unwrappedX)) % World.Width, (int)Math.Round(y));
     }
 
-    /// <summary>規劃航線的狀態列文字：經過哪裡、總距離，以及照目前船速大概要多久。</summary>
+    /// <summary>
+    /// 規劃航線的狀態列文字：經過哪裡、全程距離；讀得到船的位置時，再加上還剩多少距離、照目前船速大概要多久。
+    /// </summary>
     private string PlanStatusText()
     {
         System.Collections.Generic.List<string> names = [_legs[0].StartName];
@@ -1142,10 +1150,21 @@ public class MainForm : Form
             ? string.Join(" → ", names)
             : $"{names[0]} → … → {names[^1]}";
         string legs = _legs.Count > 1 ? $"（{_legs.Count} 段）" : "";
-        string text = $"規劃航線{legs}：{path}，距離 {length:0}";
-        if (_speed.HasValue && _speed.UnitsPerSecond > 0.3)
+
+        // 這次開程式還沒讀到座標時，船的位置是上次關閉時存下來的，不拿來算剩餘距離
+        RouteProgress? progress = _lastReadTime != 0 && _mapView.ShipPosition is WorldPoint ship
+            ? RouteProgress.Measure(_legs, ship, _planAlong)
+            : null;
+        if (progress is not RouteProgress now)
         {
-            TimeSpan eta = TimeSpan.FromSeconds(length / _speed.UnitsPerSecond);
+            return $"規劃航線{legs}：{path}，距離 {length:0}";
+        }
+        _planAlong = now.Along;
+
+        string text = $"規劃航線{legs}：{path}，剩餘 {now.Remaining:0}／全程 {now.Total:0}";
+        if (_speed.HasValue && _speed.UnitsPerSecond > 0.3 && !_mapView.Stale)
+        {
+            TimeSpan eta = TimeSpan.FromSeconds(now.Remaining / _speed.UnitsPerSecond);
             text += eta.TotalHours >= 1
                 ? $"，照目前船速約 {(int)eta.TotalHours} 小時 {eta.Minutes} 分"
                 : $"，照目前船速約 {eta.Minutes} 分 {eta.Seconds} 秒";
