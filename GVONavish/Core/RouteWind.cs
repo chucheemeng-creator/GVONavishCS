@@ -16,6 +16,13 @@ public sealed class RouteWind
     /// <summary>每隔多遠取一點（世界座標單位）。海域最小也有幾百，這個間隔夠細了。</summary>
     private const double Step = 8.0;
 
+    /// <summary>
+    /// 比這個短的航段不看風向（當成順風）。
+    /// 航線頭尾各有一小段是從港口的座標連到海上的，方向和航行的方向無關（常常剛好是反方向）；
+    /// 把它算成逆風的話，狀態列會一直顯示「還有逆風 3」，直到進港為止。
+    /// </summary>
+    private const double MinSegment = 16.0;
+
     // 每個取樣小段的終點：走到航線的哪裡、到這裡為止累計的逆風長度、累計的「相當於多遠」
     private readonly List<double> _along = [0];
     private readonly List<double> _headwind = [0];
@@ -62,7 +69,7 @@ public sealed class RouteWind
             double f0 = (double)k / pieces, f1 = (double)(k + 1) / pieces, mid = (f0 + f1) / 2;
             double piece = length / pieces;
             // 不處理風向的地方（地中海、黑海…）當成正順風：不算逆風，船速不變
-            double angle = wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season) is double windTo
+            double angle = length >= MinSegment && wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season) is double windTo
                 ? Sail.AngleOffWind(heading, windTo)
                 : 0;
             bool head = Sail.IsHeadwind(angle);

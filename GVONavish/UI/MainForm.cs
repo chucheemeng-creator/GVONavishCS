@@ -1347,7 +1347,8 @@ public class MainForm : Form
             (double headwind, double rest) = _routeWind.Remaining(now.Along);
             effective = now.OffRoute + rest;
             effectiveOther = now.OffRoute + _routeWindOther.Remaining(now.Along).Effective;
-            text += $"，{seasonName}逆風 {headwind:0}";
+            // 前面還有多長的逆風（已經走過的不算）；沒有就不顯示
+            if (headwind >= 1) text += $"，前面還有逆風 {headwind:0}（{seasonName}）";
         }
 
         if (_speed.HasValue && _speed.UnitsPerSecond > 0.3 && !_mapView.Stale)

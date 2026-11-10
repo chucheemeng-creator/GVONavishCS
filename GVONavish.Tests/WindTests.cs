@@ -266,6 +266,22 @@ public class WindTests : IDisposable
     }
 
     [Fact]
+    public void 航線_頭尾連到港口的一小段_不看風向()
+    {
+        WindMap wind = TwoAreas(270, 270, 270, 270); // 風往西吹
+        // 往西走 400（順風），最後 3 格是從海上連到港口的座標，方向剛好朝東（正逆風）
+        RouteWind route = new([Leg((1400, 4000), (1000, 4000), (1003, 4001))], wind, Season.Summer);
+        Assert.Equal(0.0, route.HeadwindLength, 6);
+        Assert.Empty(route.HeadwindRuns);
+        Assert.Equal(route.Total, route.EffectiveLength, 6);
+        Assert.Equal(0.0, route.Remaining(200).Headwind, 6);
+
+        // 夠長的航段照常算
+        RouteWind real = new([Leg((1400, 4000), (1000, 4000), (1020, 4000))], wind, Season.Summer);
+        Assert.Equal(20.0, real.HeadwindLength, 6);
+    }
+
+    [Fact]
     public void 航線_好幾段_逆風的航段分開算()
     {
         WindMap wind = TwoAreas(0, 0, 0, 0); // 風往北吹
