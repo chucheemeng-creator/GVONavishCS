@@ -90,6 +90,7 @@ public class PortsTests
     [InlineData("hobart", "荷巴特")]
     [InlineData("fraser", "芬瑟島")]      // 第二個英文名
     [InlineData("k'gari", "芬瑟島")]
+    [InlineData("矽地卡", "錫特卡")]      // 另一種中文寫法（放在英文名那一欄）
     public void 搜尋_第一個結果(string query, string expected)
     {
         List<Port> found = PortList.Search(query);
