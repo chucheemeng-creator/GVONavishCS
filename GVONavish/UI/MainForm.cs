@@ -40,7 +40,7 @@ public class MainForm : Form
         "C# 版 " + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
 
     /// <summary>
-    /// 標題列的文字：程式名稱和版本號（回報問題時看得到是哪一版），例如「GVONavish v0.9.9」。
+    /// 標題列的文字：程式名稱和版本號（回報問題時看得到是哪一版），例如「GVONavish v1.0.0」。
     /// 座標看遊戲畫面或狀態列、比例在狀態列，標題列不重複顯示。
     /// </summary>
     private static readonly string AppTitle =
