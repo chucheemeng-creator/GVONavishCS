@@ -1,9 +1,10 @@
 // RouteWind.cs
 // 規劃航線在某個季節的風：哪幾段是逆風、逆風多長、考慮逆風以後相當於多遠。
 //
-// 做法：沿著航線每隔一小段取一點，查那裡的風向，和那一段的方向比，判斷是不是逆風。
-// 「相當於多遠」（EffectiveLength）＝ 每一小段的長度 ÷ 那一段的船速比例（逆風 0.72）加起來：
-// 用不是逆風時的船速去除，就是需要的時間。
+// 做法：沿著航線每隔一小段取一點，查那裡的風向，和那一段的方向比，算出船速剩幾成。
+// 船速少了一成以上的小段算逆風（地圖上標成橘色）。
+// 「相當於多遠」（EffectiveLength）＝ 每一小段的長度 ÷ 那一段的船速比例（正逆風 0.72）加起來：
+// 用順風時的船速去除，就是需要的時間。
 
 using System;
 using System.Collections.Generic;
@@ -26,7 +27,7 @@ public sealed class RouteWind
     /// <summary>逆風的航段加起來多長。</summary>
     public double HeadwindLength => _headwind[^1];
 
-    /// <summary>考慮逆風以後相當於多遠（逆風的航段會變長）。</summary>
+    /// <summary>考慮風向以後相當於多遠（偏向逆風的航段會變長）。</summary>
     public double EffectiveLength => _effective[^1];
 
     /// <summary>逆風的航段（畫地圖用）。座標和規劃航線的轉折點一樣，X 是攤開的。</summary>
@@ -60,15 +61,15 @@ public sealed class RouteWind
         {
             double f0 = (double)k / pieces, f1 = (double)(k + 1) / pieces, mid = (f0 + f1) / 2;
             double piece = length / pieces;
-            // 不處理風向的地方（地中海、黑海…）當成側風：不算逆風，船速不變
-            WindSide side = wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season) is double windTo
-                ? Sail.Classify(heading, windTo)
-                : WindSide.Side;
-            bool head = side == WindSide.Head;
+            // 不處理風向的地方（地中海、黑海…）當成正順風：不算逆風，船速不變
+            double angle = wind.DirectionAt(a.X + dx * mid, a.Y + dy * mid, season) is double windTo
+                ? Sail.AngleOffWind(heading, windTo)
+                : 0;
+            bool head = Sail.IsHeadwind(angle);
 
             _along.Add(_along[^1] + piece);
             _headwind.Add(_headwind[^1] + (head ? piece : 0));
-            _effective.Add(_effective[^1] + piece / Sail.ForeAndAftSpeed(side));
+            _effective.Add(_effective[^1] + piece / Sail.ForeAndAftSpeed(angle));
 
             if (head)
             {

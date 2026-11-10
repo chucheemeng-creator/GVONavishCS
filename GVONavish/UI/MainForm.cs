@@ -1215,7 +1215,7 @@ public class MainForm : Form
         }
         _planAlong = now.Along;
 
-        // 考慮逆風以後，剩下的路相當於多遠（逆風的航段船速只剩 72%，所以會變長）。沒有風向資料時就是剩餘距離
+        // 考慮風向以後，剩下的路相當於多遠（偏向逆風的航段船速變慢，所以會變長）。沒有風向資料時就是剩餘距離
         double effective = now.Remaining, effectiveOther = now.Remaining;
         string text = $"規劃航線{legs}：{path}，剩餘 {now.Remaining:0}／全程 {now.Total:0}";
         if (_routeWind is not null && _routeWindOther is not null)
@@ -1228,7 +1228,7 @@ public class MainForm : Form
 
         if (_speed.HasValue && _speed.UnitsPerSecond > 0.3 && !_mapView.Stale)
         {
-            // 目前的船速可能就是逆風下的船速：先換算回不是逆風時的船速
+            // 目前的船速可能就是逆風下的船速：先換算回順風時的船速
             double baseSpeed = _speed.UnitsPerSecond / CurrentWindSpeedRatio();
             text += $"，照目前船速約 {FormatDuration(effective / baseSpeed)}";
             if (Math.Abs(effectiveOther - effective) > effective * 0.05)
@@ -1240,7 +1240,7 @@ public class MainForm : Form
     }
 
     /// <summary>
-    /// 船現在的船速，是不是逆風時的幾成（縱帆逆風 0.72，其他 1）。
+    /// 船現在的船速，是順風時的幾成（縱帆：順風到側風是 1，正逆風 0.72）。
     /// 用船現在的航向和所在海域在選定季節的風向判斷；不知道航向、沒有風向資料、
     /// 或船在不處理風向的地方（地中海、黑海…）時當成 1。
     /// </summary>
@@ -1251,7 +1251,7 @@ public class MainForm : Form
         {
             return 1.0;
         }
-        return Sail.ForeAndAftSpeed(Sail.Classify(heading, windTo));
+        return Sail.ForeAndAftSpeed(Sail.AngleOffWind(heading, windTo));
     }
 
     private static string FormatDuration(double seconds)
