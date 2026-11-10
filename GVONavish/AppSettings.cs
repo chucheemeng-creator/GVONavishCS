@@ -33,6 +33,9 @@ public class AppSettings
     /// <summary>是否顯示航跡。</summary>
     public bool ShowRoutes { get; set; } = true;
 
+    /// <summary>規劃航線時用哪個季節的風向標出逆風。</summary>
+    public Season Season { get; set; } = Season.Summer;
+
     /// <summary>船速框的位置（0 右上、1 右下、2 左上、3 左下）。</summary>
     public ScreenCorner SpeedCorner { get; set; } = ScreenCorner.TopRight;
 
@@ -128,6 +131,10 @@ public class AppSettings
         if (double.IsNaN(Scale) || double.IsInfinity(Scale) || Scale <= 0)
         {
             Scale = 1.0; // 範圍由地圖元件再限制（12.5%～400%）
+        }
+        if (!Enum.IsDefined(Season))
+        {
+            Season = Season.Summer;
         }
         if (!Enum.IsDefined(SpeedCorner))
         {
