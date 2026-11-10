@@ -144,6 +144,102 @@ public class RoutePlannerTests
         Assert.InRange(route!.Length, 0.0, 40.0);
     }
 
+    // ---- 考慮風向 ----
+
+    private static readonly WindMap Wind = TestFiles.WindMap;
+
+    private static double Time(PlannedRoute route, Season season) => new RouteWind([route], Wind, season).EffectiveLength;
+
+    [Theory]
+    [InlineData("里斯本", "聖多明哥")]
+    [InlineData("聖多明哥", "里斯本")]
+    [InlineData("里斯本", "開普敦")]
+    [InlineData("卡利卡特", "開普敦")]
+    [InlineData("麻六甲", "長崎")]
+    [InlineData("長崎", "麻六甲")]
+    [InlineData("里斯本", "倫敦")]
+    public void 考慮風向_不穿過陸地_不會比最短的航線慢(string from, string to)
+    {
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At(from), At(to))!;
+        foreach (Season season in new[] { Season.Summer, Season.Winter })
+        {
+            PlannedRoute route = planner.Plan(At(from), At(to), Wind, season)!;
+            string name = $"{from} → {to}（{season}）";
+            AssertStaysAtSea(route, name);
+            Assert.True(Time(route, season) <= Time(shortest, season) + 1e-6, name + "：比最短的航線還慢");
+            Assert.True(route.Length >= World.Distance(At(from), At(to)) - 1e-6, name + "：比直線還短");
+            Assert.InRange(route.Waypoints.Count, 2, 40); // 不會留下一堆來回折的轉折點
+        }
+    }
+
+    [Fact]
+    public void 考慮風向_夏天從里斯本到加勒比海_繞開西風帶比較快()
+    {
+        // 最短的路直接穿過往東吹的西風帶，一半以上是逆風；往南繞一點路比較長，但比較快
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At("里斯本"), At("聖多明哥"))!;
+        PlannedRoute route = planner.Plan(At("里斯本"), At("聖多明哥"), Wind, Season.Summer)!;
+        Assert.True(route.Length > shortest.Length + 50, "應該比最短的航線長");
+        Assert.True(Time(route, Season.Summer) < Time(shortest, Season.Summer) * 0.97, "應該省 3% 以上的時間");
+    }
+
+    [Fact]
+    public void 考慮風向_地中海裡不處理風向_和最短的航線一樣()
+    {
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At("熱那亞"), At("伊斯坦堡"))!;
+        PlannedRoute route = planner.Plan(At("熱那亞"), At("伊斯坦堡"), Wind, Season.Winter)!;
+        Assert.Equal(shortest.Length, route.Length, 6);
+    }
+
+    [Fact]
+    public void 考慮風向_用完以後_不考慮風向的結果不變()
+    {
+        RoutePlanner planner = new(Map);
+        double before = planner.Plan(At("里斯本"), At("聖多明哥"))!.Length;
+        planner.Plan(At("里斯本"), At("聖多明哥"), Wind, Season.Summer);
+        Assert.Equal(before, planner.Plan(At("里斯本"), At("聖多明哥"))!.Length, 6);
+    }
+
+    [Fact]
+    public void 兩個季節_另一季走別條路明顯比較快時_才有另一條航線()
+    {
+        RoutePlanner planner = new(Map);
+
+        // 里斯本到加勒比海：冬天的航線在夏天不夠快，夏天另外有一條
+        PlannedRoute winter = planner.PlanBothSeasons(At("里斯本"), At("聖多明哥"), Wind, Season.Winter)!;
+        Assert.NotNull(winter.Alternate);
+        Assert.True(Time(winter.Alternate!, Season.Summer) < Time(winter, Season.Summer) * (1 - RoutePlanner.AlternateMinSaving));
+        AssertStaysAtSea(winter.Alternate!, "里斯本 → 聖多明哥（夏季的另一條）");
+
+        // 地中海裡兩季一樣
+        Assert.Null(planner.PlanBothSeasons(At("熱那亞"), At("伊斯坦堡"), Wind, Season.Summer)!.Alternate);
+
+        // 到不了的地方
+        Assert.Null(planner.PlanBothSeasons(new WorldPoint(4000, 2300), At("里斯本"), Wind, Season.Summer));
+    }
+
+    [Fact]
+    public void 換季_主要的航線和另一條對調()
+    {
+        PlannedRoute main = new() { StartName = "甲", EndName = "乙", Length = 100 };
+        PlannedRoute other = new() { Length = 120 };
+        main.Alternate = other;
+
+        PlannedRoute swapped = main.SwapAlternate();
+        Assert.Same(other, swapped);
+        Assert.Same(main, swapped.Alternate);
+        Assert.Null(main.Alternate);
+        Assert.Equal("甲", swapped.StartName);   // 名稱跟著過去
+        Assert.Equal("乙", swapped.EndName);
+
+        Assert.Same(main, swapped.SwapAlternate()); // 再換一次就換回來
+
+        PlannedRoute single = new();
+        Assert.Same(single, single.SwapAlternate()); // 沒有另一條時不變
+    }
+
     [Fact]
     public void 規劃航線的進度_走完全程剩下零()
     {

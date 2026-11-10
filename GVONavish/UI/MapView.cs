@@ -113,6 +113,10 @@ public class MapView : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public IReadOnlyList<PlannedRoute>? PlannedLegs { get; set; }
 
+    /// <summary>要不要畫另一個季節的航線（<see cref="PlannedRoute.Alternate"/>，紫色虛線）。</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ShowAlternateRoutes { get; set; }
+
     /// <summary>規劃航線上逆風的航段（橘色實線，疊在綠色虛線上）。null 或空清單表示沒有。</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public IReadOnlyList<(Vec2 From, Vec2 To)>? HeadwindRuns { get; set; }
@@ -152,6 +156,7 @@ public class MapView : Control
     private static readonly Color StaleColor = Color.FromArgb(150, 160, 160, 160);       // 舊資料：半透明灰
     private static readonly Color PlannedColor = Color.FromArgb(0, 255, 140);             // 規劃航線：亮綠
     private static readonly Color HeadwindColor = Color.FromArgb(255, 140, 0);            // 規劃航線逆風的航段：橘
+    private static readonly Color AlternateColor = Color.FromArgb(215, 150, 255);         // 另一個季節的航線：淡紫
     private static readonly Color MarkerColor = Color.FromArgb(255, 220, 80);             // 座標標籤：黃
 
     /// <summary>比例或位置改變時觸發（用來更新標題列）。</summary>
@@ -517,6 +522,19 @@ public class MapView : Control
         using Pen pen = new(PlannedColor, LineWidth + 1f) { DashStyle = DashStyle.Dash, LineJoin = LineJoin.Round };
         using SolidBrush dot = new(PlannedColor);
         using Pen ring = new(PlannedColor, 2f);
+
+        // 另一個季節的航線：畫在最下面，細一點的紫色虛線
+        if (ShowAlternateRoutes)
+        {
+            using Pen alternate = new(AlternateColor, LineWidth) { DashStyle = DashStyle.Dash, LineJoin = LineJoin.Round };
+            foreach (PlannedRoute leg in PlannedLegs!)
+            {
+                if (leg.Alternate is not PlannedRoute other || other.Waypoints.Count < 2) continue;
+                Vec2[] pts = [.. other.Waypoints];
+                DrawWrappedPolyline(g, shadow, pts, view);
+                DrawWrappedPolyline(g, alternate, pts, view);
+            }
+        }
 
         foreach (PlannedRoute leg in PlannedLegs!)
         {
