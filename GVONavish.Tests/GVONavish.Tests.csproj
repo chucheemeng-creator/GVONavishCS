@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 測試專案的版本號（不發佈，很少改） -->
+    <Version>1.0.0</Version>
+    <!-- 和 GVONavish 一樣的目標框架，才能直接引用它 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>GVONavish.Tests</AssemblyName>
+    <RootNamespace>GVONavish.Tests</RootNamespace>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 引用主程式：seamask.bin 會跟著複製到測試的輸出資料夾 -->
+    <ProjectReference Include="..\GVONavish\GVONavish.csproj" />
+  </ItemGroup>
+
+</Project>

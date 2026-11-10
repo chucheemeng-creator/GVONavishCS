@@ -36,6 +36,10 @@
     <None Update="seamask.bin">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- 每個海域的季節風向（規劃航線標出逆風用） -->
+    <None Update="winds.bin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

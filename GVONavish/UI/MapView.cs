@@ -113,6 +113,10 @@ public class MapView : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public IReadOnlyList<PlannedRoute>? PlannedLegs { get; set; }
 
+    /// <summary>規劃航線上逆風的航段（橘色實線，疊在綠色虛線上）。null 或空清單表示沒有。</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public IReadOnlyList<(Vec2 From, Vec2 To)>? HeadwindRuns { get; set; }
+
     /// <summary>雙擊地圖留下的座標標籤位置。null 表示沒有。</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public WorldPoint? Marker { get; set; }
@@ -147,6 +151,7 @@ public class MapView : Control
     private static readonly Color HeadingLineColor = Color.Magenta;                       // 航向線：洋紅
     private static readonly Color StaleColor = Color.FromArgb(150, 160, 160, 160);       // 舊資料：半透明灰
     private static readonly Color PlannedColor = Color.FromArgb(0, 255, 140);             // 規劃航線：亮綠
+    private static readonly Color HeadwindColor = Color.FromArgb(255, 140, 0);            // 規劃航線逆風的航段：橘
     private static readonly Color MarkerColor = Color.FromArgb(255, 220, 80);             // 座標標籤：黃
 
     /// <summary>比例或位置改變時觸發（用來更新標題列）。</summary>
@@ -521,6 +526,22 @@ public class MapView : Control
             // 先畫一圈深色外框，在任何底色上都看得清楚
             DrawWrappedPolyline(g, shadow, pts, view);
             DrawWrappedPolyline(g, pen, pts, view);
+        }
+
+        // 逆風的航段：用橘色實線蓋在上面（在轉折點的圓點下面）
+        if (HeadwindRuns is not null)
+        {
+            using Pen headwind = new(HeadwindColor, LineWidth + 1f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            foreach ((Vec2 from, Vec2 to) in HeadwindRuns)
+            {
+                DrawWrappedPolyline(g, headwind, [from, to], view);
+            }
+        }
+
+        foreach (PlannedRoute leg in PlannedLegs!)
+        {
+            if (leg.Waypoints.Count < 2) continue;
+            Vec2[] pts = [.. leg.Waypoints];
 
             // 轉折點畫小圓點，每一段的終點畫大一點的圈
             for (int i = 1; i < pts.Length; i++)
