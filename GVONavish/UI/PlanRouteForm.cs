@@ -40,8 +40,8 @@ public class PlanRouteForm : Form
     public string StartLabel { get; private set; } = "";
     public string EndLabel { get; private set; } = "";
 
-    /// <param name="shipPosition">船目前的位置（起點預設用這個）。</param>
-    /// <param name="lastStart">上次的起點文字。</param>
+    /// <param name="shipPosition">船目前的位置（沒有上次的起點時，起點預設用這個）。</param>
+    /// <param name="lastStart">上次的起點文字；空字串表示上次用的是船的位置。</param>
     /// <param name="lastEnd">上次的終點文字（港口名稱或座標）。</param>
     /// <param name="recentPorts">最近用過的港口名稱（新的在前）。</param>
     public PlanRouteForm(WorldPoint? shipPosition, string lastStart, string lastEnd, IReadOnlyList<string> recentPorts)
@@ -50,7 +50,7 @@ public class PlanRouteForm : Form
         _recentPorts = recentPorts;
         _active = _txtEnd;
         BuildUi();
-        _txtStart.Text = shipPosition.HasValue ? shipPosition.Value.ToString() : lastStart;
+        _txtStart.Text = lastStart.Length > 0 ? lastStart : shipPosition?.ToString() ?? "";
         _txtEnd.Text = lastEnd;
         UpdateInfo(_txtStart, _lblStartInfo);
         UpdateInfo(_txtEnd, _lblEndInfo);
