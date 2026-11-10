@@ -9,7 +9,8 @@
 //      太靠近海岸的格子會「比較貴」，所以航線會和海岸保持一點距離，但窄的海峽還是過得去。
 //   3. 找到的路徑是一格一格的鋸齒，最後拉直：能直線到達的點就直接連過去，
 //      只在需要轉彎的地方留下轉折點，跟實際開船的走法比較像。
-//   4. 像拉橡皮筋一樣收緊：每個轉折點往前後兩點的連線方向移，移到快碰到陸地為止。
+//   4. 像拉橡皮筋一樣收緊：每個轉折點往前後兩點的連線方向移，移到快碰到陸地為止；
+//      再沿著航線往前後滑，滑到直線剛好能繞過陸地（海岬）的位置。
 //
 // 考慮風向時（Plan 有給風向資料）：
 //   - A* 找的是「最省時間」的路：每一步的成本 = 距離 ÷ 船速比例（Sail.ForeAndAftSpeed：
@@ -599,12 +600,54 @@ public class RoutePlanner
                 double dist = Math.Sqrt((target.X - w.X) * (target.X - w.X) + (target.Y - w.Y) * (target.Y - w.Y)) * lo;
                 if (dist > 0.25)
                 {
-                    p[k] = (w.X + (target.X - w.X) * lo, w.Y + (target.Y - w.Y) * lo);
+                    w = (w.X + (target.X - w.X) * lo, w.Y + (target.Y - w.Y) * lo);
+                    p[k] = w;
+                    moved = true;
+                    if (_wind is not null) timeNow = LineTime(a, w) + LineTime(w, b);
+                }
+
+                // 沿著前後兩段滑動：轉折點在開闊的海上、被遠處的陸地（例如海岬）擋住時，
+                // 往連線的方向移不動（一移，另一段就會切到陸地），要沿著航線往陸地那一頭滑過去，
+                // 滑到直線剛好能繞過陸地的位置。兩種滑法都只會讓航線變短。
+                if (Slide(p, k, a, b, towardPrevious: true, needB, timeNow)
+                    || Slide(p, k, a, b, towardPrevious: false, needA, timeNow))
+                {
                     moved = true;
                 }
             }
             if (!moved) break;
         }
+    }
+
+    /// <summary>
+    /// 把第 k 個轉折點沿著航線滑向前一點（towardPrevious）或後一點，能滑多遠就滑多遠：
+    /// 滑向前一點時，「新位置 → 後一點」的直線要走得通；滑向後一點時，「前一點 → 新位置」要走得通。
+    /// 有移動就回傳 true。
+    /// </summary>
+    /// <param name="need">新的那一段直線要保持的離岸距離（和原本那一段相同）。</param>
+    /// <param name="timeNow">考慮風向時：目前經過這個轉折點要花的時間，滑動以後不能比它慢。</param>
+    private bool Slide(List<(double X, double Y)> p, int k, (double X, double Y) a, (double X, double Y) b,
+        bool towardPrevious, int need, double timeNow)
+    {
+        var w = p[k];
+        var toward = towardPrevious ? a : b;
+        var other = towardPrevious ? b : a;
+        double dx = toward.X - w.X, dy = toward.Y - w.Y;
+
+        // 二分法：最多滑到離目標點還有一點距離的地方（滑到底的話，這個轉折點就多餘了，由上面的檢查拿掉）
+        double lo = 0, hi = 0.98;
+        for (int it = 0; it < 12; it++)
+        {
+            double mid = (lo + hi) / 2;
+            var c = (X: w.X + dx * mid, Y: w.Y + dy * mid);
+            bool ok = LineIsClear(c, other, need)
+                && (_wind is null || LineTime(a, c) + LineTime(c, b) <= timeNow);
+            if (ok) lo = mid;
+            else hi = mid;
+        }
+        if (Math.Sqrt(dx * dx + dy * dy) * lo <= 0.25) return false;
+        p[k] = (w.X + dx * lo, w.Y + dy * lo);
+        return true;
     }
 
     // 這一段直線目前能保持的離岸距離（3、2、1 或 0 格）

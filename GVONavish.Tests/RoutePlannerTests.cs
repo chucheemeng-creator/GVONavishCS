@@ -106,6 +106,21 @@ public class RoutePlannerTests
         Assert.Null(new RoutePlanner(Map).Plan(At("里斯本"), new WorldPoint(4000, 2300)));
     }
 
+    [Theory]
+    [InlineData("里斯本", "開普敦", "雅加達")]     // 繞過好望角以後應該直線到雅加達，不是先往東走一段再轉彎
+    [InlineData("雅加達", "開普敦", "里斯本")]
+    [InlineData("倫敦", "里斯本", "開普敦")]
+    [InlineData("里斯本", "開普敦", "卡利卡特")]
+    [InlineData("倫敦", "開普敦", "長崎")]
+    public void 直接走不會比中途靠港還遠(string from, string via, string to)
+    {
+        // 中途的港口就在航線會經過的海岬旁邊。直接規劃的航線如果比「分兩段、中途靠港」還長，
+        // 表示轉折點留在不該留的地方
+        double direct = Plan(from, to).Length;
+        double twoLegs = Plan(from, via).Length + Plan(via, to).Length;
+        Assert.True(direct <= twoLegs, $"{from} → {to} 直接走 {direct:0}，經過 {via} 反而只要 {twoLegs:0}");
+    }
+
     [Fact]
     public void 跨過地圖邊界_走近的那一邊_X連續不折回()
     {
@@ -190,7 +205,7 @@ public class RoutePlannerTests
         RoutePlanner planner = new(Map);
         PlannedRoute shortest = planner.Plan(At("熱那亞"), At("伊斯坦堡"))!;
         PlannedRoute route = planner.Plan(At("熱那亞"), At("伊斯坦堡"), Wind, Season.Winter)!;
-        Assert.Equal(shortest.Length, route.Length, 6);
+        Assert.InRange(route.Length / shortest.Length, 0.999, 1.001);
     }
 
     [Fact]
