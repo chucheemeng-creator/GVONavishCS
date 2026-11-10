@@ -121,6 +121,34 @@ public class RoutePlannerTests
         Assert.True(direct <= twoLegs, $"{from} → {to} 直接走 {direct:0}，經過 {via} 反而只要 {twoLegs:0}");
     }
 
+    [Theory]
+    [InlineData("里斯本", "開普敦")]
+    [InlineData("里斯本", "卡利卡特")]
+    [InlineData("巴拿馬", "利馬")]
+    [InlineData("雅加達", "里斯本")]
+    [InlineData("阿姆斯特丹", "開普敦")]
+    public void 繞過海岬時_和海岸保持三格的距離(string from, string to)
+    {
+        // 這幾條航線不經過窄海峽。離起點、終點 40 以上的地方，航線都要離岸至少 3 格（12 個座標單位）：
+        // 收緊航線時，轉折點不能被拉到貼著海岬
+        PlannedRoute route = Plan(from, to);
+        Vec2 first = route.Waypoints[0], last = route.Waypoints[^1];
+        for (int i = 1; i < route.Waypoints.Count; i++)
+        {
+            Vec2 a = route.Waypoints[i - 1], b = route.Waypoints[i];
+            double length = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+            for (double d = 0; d < length; d += 1.0)
+            {
+                double x = a.X + (b.X - a.X) * d / length, y = a.Y + (b.Y - a.Y) * d / length;
+                if (Math.Sqrt((x - first.X) * (x - first.X) + (y - first.Y) * (y - first.Y)) < 40) continue;
+                if (Math.Sqrt((x - last.X) * (x - last.X) + (y - last.Y) * (y - last.Y)) < 40) continue;
+                (int cx, int cy) = Map.CellFromWorld(x, y);
+                int coast = Map.CoastDistance[cy * Map.Width + Map.WrapCellX(cx)];
+                Assert.True(coast >= 3, $"{from} → {to}：航線在 {x:0}, {y:0} 離岸只有 {coast} 格");
+            }
+        }
+    }
+
     [Fact]
     public void 跨過地圖邊界_走近的那一邊_X連續不折回()
     {

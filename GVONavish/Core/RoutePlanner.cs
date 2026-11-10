@@ -662,7 +662,9 @@ public class RoutePlanner
 
     /// <summary>
     /// 直線經過的每一格都是海，而且離海岸至少 need 格。
-    /// 兩端附近（need 格以內）只要求是海：端點本身可能就在海峽或港口邊，離岸本來就近。
+    /// 端點本身離岸就不到 need 格時（在海峽裡或港口邊），那一端附近（need 格以內）只要求是海。
+    /// 端點在開闊的海上時不放寬：不然收緊航線時，轉折點是前後兩段共同的端點，
+    /// 它附近都不檢查離岸距離，會被一路拉到貼著陸地的位置。
     /// </summary>
     /// <remarks>
     /// 用格子走訪（Amanatides–Woo）把線段真正碰到的每一格都查過。
@@ -685,18 +687,21 @@ public class RoutePlanner
         double tMaxX = dx > 0 ? (x + 1 - ux) / dx : dx < 0 ? (ux - x) / -dx : double.PositiveInfinity;
         double tMaxY = dy > 0 ? (y + 1 - uy) / dy : dy < 0 ? (uy - y) / -dy : double.PositiveInfinity;
 
+        // 哪一端附近可以放寬（端點本身離岸就不到 need 格）
+        bool looseA = CoastAt(a) < need, looseB = CoastAt(b) < need;
+
         double tEnter = 0;
         while (true)
         {
             double tExit = Math.Min(Math.Min(tMaxX, tMaxY), 1.0);
-            if (!CellIsClear(x, y, tEnter, tExit, length, need)) return false;
+            if (!CellIsClear(x, y, tEnter, tExit, length, need, looseA, looseB)) return false;
             if (tExit >= 1.0) return true;
 
             if (Math.Abs(tMaxX - tMaxY) < 1e-9)
             {
                 // 剛好穿過格子的角：角旁邊的兩格也算碰到
-                if (!CellIsClear(x + stepX, y, tExit, tExit, length, need)) return false;
-                if (!CellIsClear(x, y + stepY, tExit, tExit, length, need)) return false;
+                if (!CellIsClear(x + stepX, y, tExit, tExit, length, need, looseA, looseB)) return false;
+                if (!CellIsClear(x, y + stepY, tExit, tExit, length, need, looseA, looseB)) return false;
                 x += stepX;
                 y += stepY;
                 tMaxX += tDeltaX;
@@ -716,13 +721,22 @@ public class RoutePlanner
         }
     }
 
-    // 線段在 t = tEnter ~ tExit 經過格子 (x, y)：這格必須是海；離兩端超過 need 格的地方，還要離岸至少 need 格
-    private bool CellIsClear(int x, int y, double tEnter, double tExit, double length, int need)
+    // 線段在 t = tEnter ~ tExit 經過格子 (x, y)：這格必須是海，而且離岸至少 need 格；
+    // 可以放寬的那一端（looseA：起點，looseB：終點）附近 need 格以內，只要求是海
+    private bool CellIsClear(int x, int y, double tEnter, double tExit, double length, int need, bool looseA, bool looseB)
     {
         if (y < 0 || y >= _map.Height) return false;
         int i = y * _map.Width + _map.WrapCellX(x);
         if (!_map.IsSea[i]) return false;
-        bool nearEnd = tEnter * length <= need || (1.0 - tExit) * length <= need;
+        bool nearEnd = (looseA && tEnter * length <= need) || (looseB && (1.0 - tExit) * length <= need);
         return nearEnd || _map.CoastDistance[i] >= need;
+    }
+
+    // 這個點所在的格子離海岸幾格（座標是格子，整數是格子中心，X 是攤開的）
+    private int CoastAt((double X, double Y) p)
+    {
+        int x = _map.WrapCellX((int)Math.Floor(p.X + 0.5));
+        int y = Math.Clamp((int)Math.Floor(p.Y + 0.5), 0, _map.Height - 1);
+        return _map.CoastDistance[y * _map.Width + x];
     }
 }

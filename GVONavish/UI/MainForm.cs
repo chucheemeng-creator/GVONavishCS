@@ -101,9 +101,9 @@ public class MainForm : Form
     private readonly WindMap? _wind = WindMap.Load(WindMap.DefaultPath); // 每個海域的季節風向；找不到 winds.bin 時是 null
     private Season _season;           // 用哪個季節的風向
     private bool _considerWind;       // 規劃航線時考慮風向（false：走最短的路，不標逆風）
-    // 目前的規劃航線是從「規劃航線」視窗開始的（起點是使用者指定的）：改風向時照新的風向重新規劃。
-    // 用滑鼠從船的位置規劃的不重算：船已經不在當時的位置了
+    // 目前的規劃航線是從「規劃航線」視窗開始的：換季時照新的季節重新規劃（見 SetWindMode）
     private bool _legsFromDialog;
+    private bool _settingsApplied;    // 設定已經套用到畫面上了（之後存檔時才把畫面的狀態寫回設定）
     private RouteWind? _routeWind;      // 規劃航線在 _season 的風
     private RouteWind? _routeWindOther; // 規劃航線在另一個季節的風（比較預計時間用）
     private ToolStripMenuItem _miPlanUndo = null!;
@@ -327,6 +327,7 @@ public class MainForm : Form
             _mapView.SetShipPosition(last);
         }
 
+        _settingsApplied = true;
         UpdateStatus();
     }
 
@@ -524,7 +525,7 @@ public class MainForm : Form
             _settings.MapFile = dlg.FileName.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)
                 ? dlg.FileName[baseDir.Length..]
                 : dlg.FileName;
-            _settings.Save();
+            SaveSettings();
         }
     }
 
@@ -689,14 +690,19 @@ public class MainForm : Form
 
     /// <summary>
     /// 選擇規劃航線用哪個季節的風向，或不考慮風向。
-    /// 從「規劃航線」視窗規劃的航線，會照新的設定重新規劃。
-    /// 用滑鼠從船的位置規劃的不重算；換季時，有「另一季的航線」的航段會換成那一條。
+    /// 設定改了以後，已經規劃好的航線會照新的設定重新規劃，或換成另一季的航線。
     /// </summary>
     private void SetWindMode(Season season, bool considerWind)
     {
         considerWind = considerWind && _wind is not null;
-        bool changed = season != _season || considerWind != _considerWind;
-        bool replan = changed && _legsFromDialog && _legs.Count > 0 && _planner is not null && !_planning;
+        // 什麼時候重新規劃：
+        //   - 「考慮風向」開或關：一律重新規劃。不然航線和設定對不上
+        //     （選了走最短的路，地圖上卻還是繞開逆風的航線；或反過來，開了風向卻沒有避開逆風）
+        //   - 只換季節：從「規劃航線」視窗規劃的重新規劃；用滑鼠規劃的把「另一季的航線」換上來
+        //     （規劃時兩季都算過了，沒有另一條表示兩季走同一條路差不多）
+        bool windToggled = considerWind != _considerWind;
+        bool changed = season != _season || windToggled;
+        bool replan = changed && (windToggled || _legsFromDialog) && _legs.Count > 0 && _planner is not null && !_planning;
         if (season != _season && !replan)
         {
             for (int i = 0; i < _legs.Count; i++)
@@ -882,7 +888,7 @@ public class MainForm : Form
         _settings.RouteManagerWidth = b.Width;
         _settings.RouteManagerHeight = b.Height;
         _settings.RouteManagerColumns = form.GetColumnWidths();
-        _settings.Save();
+        SaveSettings();
     }
 
     /// <summary>「外觀」子選單的一個選項。目前的設定打勾；換了之後要重新開程式才會套用。</summary>
@@ -899,7 +905,7 @@ public class MainForm : Form
         {
             if (_settings.ColorMode == mode) return;
             _settings.ColorMode = mode;
-            _settings.Save();
+            SaveSettings();
             foreach (ToolStripMenuItem other in parent.DropDownItems)
             {
                 other.Checked = other == item;
@@ -950,8 +956,38 @@ public class MainForm : Form
         if (!_mapView.ShipPosition.HasValue) return;
         WorldPoint p = _mapView.ShipPosition.Value;
         if (p.X == _settings.LastX && p.Y == _settings.LastY) return;
-        _settings.LastX = p.X;
-        _settings.LastY = p.Y;
+        SaveSettings();
+    }
+
+    /// <summary>
+    /// 把目前的狀態（視窗位置、選單上打勾的選項、風向、船的位置…）寫回設定再存檔。
+    /// 每次存檔都走這裡：不然執行中改的選項只有關閉程式時才寫回設定，
+    /// 中途存檔（例如規劃航線後記住港口）存到的是舊的值，程式被強制結束或斷電就沒了。
+    /// </summary>
+    private void SaveSettings()
+    {
+        if (_settingsApplied) // 設定還沒套用到畫面上時（啟動途中），畫面上的是預設值，不能寫回去
+        {
+            Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            _settings.WindowX = b.X;
+            _settings.WindowY = b.Y;
+            _settings.WindowWidth = b.Width;
+            _settings.WindowHeight = b.Height;
+            _settings.TopMost = TopMost;
+            _settings.FollowShip = _mapView.FollowShip;
+            _settings.Scale = _mapView.ViewScale;
+            _settings.ShowHeadingLine = _mapView.ShowHeadingLine;
+            _settings.ShowSpeed = _mapView.ShowSpeed;
+            _settings.ShowRoutes = _mapView.ShowRoutes;
+            _settings.Season = _season;
+            _settings.ConsiderWind = _considerWind;
+            _settings.SpeedCorner = _mapView.SpeedCorner;
+            if (_mapView.ShipPosition.HasValue)
+            {
+                _settings.LastX = _mapView.ShipPosition.Value.X;
+                _settings.LastY = _mapView.ShipPosition.Value.Y;
+            }
+        }
         _settings.Save();
     }
 
@@ -1076,7 +1112,7 @@ public class MainForm : Form
             _settings.RecentPorts.RemoveAt(_settings.RecentPorts.Count - 1);
         }
         // 馬上存：船停在港口不動時，定時存檔（只在位置有變時存）不會存到這裡
-        _settings.Save();
+        SaveSettings();
     }
 
     private void UndoLastLeg()
@@ -1399,7 +1435,7 @@ public class MainForm : Form
             _capture.OffsetFromRightBottom = new Point(dlg.OffsetX, dlg.OffsetY);
             _timer.Interval = Math.Max(100, dlg.IntervalMs);
             _filter.Reset(); // 截圖位置改了，重新確認座標
-            _settings.Save();
+            SaveSettings();
         }
     }
 
@@ -1521,26 +1557,7 @@ public class MainForm : Form
             RememberRouteManagerLayout(_routeManager); // 主視窗關閉時航線管理還開著
         }
 
-        Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-        _settings.WindowX = b.X;
-        _settings.WindowY = b.Y;
-        _settings.WindowWidth = b.Width;
-        _settings.WindowHeight = b.Height;
-        _settings.TopMost = TopMost;
-        _settings.FollowShip = _mapView.FollowShip;
-        _settings.Scale = _mapView.ViewScale;
-        _settings.ShowHeadingLine = _mapView.ShowHeadingLine;
-        _settings.ShowSpeed = _mapView.ShowSpeed;
-        _settings.ShowRoutes = _mapView.ShowRoutes;
-        _settings.Season = _season;
-        _settings.ConsiderWind = _considerWind;
-        _settings.SpeedCorner = _mapView.SpeedCorner;
-        if (_mapView.ShipPosition.HasValue)
-        {
-            _settings.LastX = _mapView.ShipPosition.Value.X;
-            _settings.LastY = _mapView.ShipPosition.Value.Y;
-        }
-        _settings.Save();
+        SaveSettings();
 
         _capture.Dispose();
         base.OnFormClosing(e);
