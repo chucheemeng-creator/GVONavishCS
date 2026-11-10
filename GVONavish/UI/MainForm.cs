@@ -39,6 +39,13 @@ public class MainForm : Form
     private static readonly string AppVersion =
         "C# 版 " + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
 
+    /// <summary>
+    /// 標題列的文字：程式名稱和版本號（回報問題時看得到是哪一版），例如「GVONavish v1.0.0」。
+    /// 座標看遊戲畫面或狀態列、比例在狀態列，標題列不重複顯示。
+    /// </summary>
+    private static readonly string AppTitle =
+        AppName + " v" + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
+
     /// <summary>超過這麼久沒讀到座標，狀態列就顯示「看不到座標」。</summary>
     private const int CoordLostMs = 3000;
 
@@ -92,7 +99,11 @@ public class MainForm : Form
         new System.Collections.Generic.List<PlannedRoute>(); // 規劃航線的每一段
     private double? _planAlong;       // 船在規劃航線上走到哪裡了（RouteProgress.Along）；航線改了就清掉
     private readonly WindMap? _wind = WindMap.Load(WindMap.DefaultPath); // 每個海域的季節風向；找不到 winds.bin 時是 null
-    private Season _season;           // 用哪個季節的風向標出逆風
+    private Season _season;           // 用哪個季節的風向
+    private bool _considerWind;       // 規劃航線時考慮風向（false：走最短的路，不標逆風）
+    // 目前的規劃航線是從「規劃航線」視窗開始的：換季時照新的季節重新規劃（見 SetWindMode）
+    private bool _legsFromDialog;
+    private bool _settingsApplied;    // 設定已經套用到畫面上了（之後存檔時才把畫面的狀態寫回設定）
     private RouteWind? _routeWind;      // 規劃航線在 _season 的風
     private RouteWind? _routeWindOther; // 規劃航線在另一個季節的風（比較預計時間用）
     private ToolStripMenuItem _miPlanUndo = null!;
@@ -167,7 +178,7 @@ public class MainForm : Form
 
     private void BuildUi()
     {
-        Text = AppName;
+        Text = AppTitle;
         Font = new Font("Microsoft JhengHei UI", 9f);
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -177,7 +188,7 @@ public class MainForm : Form
         _mapView.Dock = DockStyle.Fill;
         _mapView.Routes = _routes;
         _mapView.ContextMenuStrip = _menu;
-        _mapView.ViewChanged += (s, e) => UpdateTitleAndStatus();
+        _mapView.ViewChanged += (s, e) => UpdateStatus();
         _mapView.FollowShipChanged += (s, e) => _miFollow.Checked = _mapView.FollowShip;
         _mapView.PlannedLegs = _legs;
         _mapView.MapDoubleClicked += (s, e) => OnMapDoubleClicked(e);
@@ -221,9 +232,10 @@ public class MainForm : Form
         ToolStripMenuItem miRouteManager = new("航線管理…", null, (s, e) => ShowRouteManager());
         ToolStripMenuItem miPlan = new("規劃航線…", null, (s, e) => ShowPlanDialog());
         _miPlanHere = new ToolStripMenuItem("規劃航線到這裡", null, (s, e) => PlanToRightClick());
-        _miSeason = new ToolStripMenuItem(_wind is null ? "季節風向（找不到 winds.bin）" : "季節風向") { Enabled = _wind is not null };
-        AddSeasonItem("夏季", Season.Summer);
-        AddSeasonItem("冬季", Season.Winter);
+        _miSeason = new ToolStripMenuItem(_wind is null ? "風向（找不到 winds.bin）" : "風向") { Enabled = _wind is not null };
+        AddWindItem("夏季（帆船）", Season.Summer);
+        AddWindItem("冬季（帆船）", Season.Winter);
+        AddWindItem("不考慮風向（走最短的路）", null);
         _miPlanClear = new ToolStripMenuItem("清除規劃航線", null, (s, e) => ClearPlannedRoute()) { ShortcutKeyDisplayString = "Esc" };
         _miMarkerClear = new ToolStripMenuItem("清除座標標籤", null, (s, e) => ClearMarker()) { ShortcutKeyDisplayString = "Esc" };
         _miPlanUndo = new ToolStripMenuItem("刪掉最後一段規劃", null, (s, e) => UndoLastLeg()) { ShortcutKeyDisplayString = "Backspace" };
@@ -303,7 +315,7 @@ public class MainForm : Form
         _miSpeed.Checked = _settings.ShowSpeed;
         _mapView.ShowRoutes = _settings.ShowRoutes;
         _miRoutes.Checked = _settings.ShowRoutes;
-        SetSeason(_settings.Season);
+        SetWindMode(_settings.Season, _settings.ConsiderWind);
         SetSpeedCorner(Enum.IsDefined(typeof(ScreenCorner), _settings.SpeedCorner) ? _settings.SpeedCorner : ScreenCorner.TopRight);
         _mapView.SetFocus(_settings.LastX, _settings.LastY);
 
@@ -315,7 +327,8 @@ public class MainForm : Form
             _mapView.SetShipPosition(last);
         }
 
-        UpdateTitleAndStatus();
+        _settingsApplied = true;
+        UpdateStatus();
     }
 
     /// <summary>
@@ -512,7 +525,7 @@ public class MainForm : Form
             _settings.MapFile = dlg.FileName.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)
                 ? dlg.FileName[baseDir.Length..]
                 : dlg.FileName;
-            _settings.Save();
+            SaveSettings();
         }
     }
 
@@ -564,7 +577,7 @@ public class MainForm : Form
         }
 
         UpdateStale(now);
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     /// <summary>遊戲多開時，在狀態列說明目前讀哪一個視窗；只開一個時是空字串。</summary>
@@ -668,28 +681,127 @@ public class MainForm : Form
         _mapView.Invalidate();
     }
 
-    private void AddSeasonItem(string text, Season season)
+    // season 是 null 的那一項是「不考慮風向」
+    private void AddWindItem(string text, Season? season)
     {
-        ToolStripMenuItem item = new(text, null, (s, e) => SetSeason(season)) { Tag = season };
+        ToolStripMenuItem item = new(text, null, (s, e) => SetWindMode(season ?? _season, season.HasValue)) { Tag = season };
         _miSeason.DropDownItems.Add(item);
     }
 
-    /// <summary>選擇用哪個季節的風向標出規劃航線上逆風的航段。</summary>
-    private void SetSeason(Season season)
+    /// <summary>
+    /// 選擇規劃航線用哪個季節的風向，或不考慮風向。
+    /// 設定改了以後，已經規劃好的航線會照新的設定重新規劃，或換成另一季的航線。
+    /// </summary>
+    private void SetWindMode(Season season, bool considerWind)
     {
+        considerWind = considerWind && _wind is not null;
+        // 什麼時候重新規劃：
+        //   - 「考慮風向」開或關：一律重新規劃。不然航線和設定對不上
+        //     （選了走最短的路，地圖上卻還是繞開逆風的航線；或反過來，開了風向卻沒有避開逆風）
+        //   - 只換季節：從「規劃航線」視窗規劃的重新規劃；用滑鼠規劃的把「另一季的航線」換上來
+        //     （規劃時兩季都算過了，沒有另一條表示兩季走同一條路差不多）
+        bool windToggled = considerWind != _considerWind;
+        bool changed = season != _season || windToggled;
+        bool replan = changed && (windToggled || _legsFromDialog) && _legs.Count > 0 && _planner is not null && !_planning;
+        if (season != _season && !replan)
+        {
+            for (int i = 0; i < _legs.Count; i++)
+            {
+                _legs[i] = _legs[i].SwapAlternate();
+            }
+            _planAlong = null;
+        }
         _season = season;
+        _considerWind = considerWind;
         foreach (ToolStripMenuItem item in _miSeason.DropDownItems)
         {
-            item.Checked = (Season)item.Tag! == season;
+            item.Checked = _considerWind ? item.Tag is Season s && s == season : item.Tag is null;
         }
+        _mapView.ShowAlternateRoutes = _considerWind;
         UpdateRouteWind();
-        UpdateTitleAndStatus();
+        UpdateStatus();
+        if (replan)
+        {
+            ReplanLegs();
+        }
     }
 
-    /// <summary>規劃航線或季節改了以後，重新找出逆風的航段。</summary>
+    /// <summary>
+    /// 照目前的風向設定，把規劃航線的每一段重新規劃一次（起點、終點不變）。
+    /// 算好以前先留著原本的航線；計算期間航線被改過（清除、刪掉一段…）就不套用。
+    /// </summary>
+    private async void ReplanLegs()
+    {
+        if (_planning || _planner is null) return;
+
+        PlannedRoute[] before = [.. _legs];
+        RoutePlanner planner = _planner;
+        WindMap? wind = _considerWind ? _wind : null;
+        Season season = _season;
+
+        _planning = true;
+        _mapView.Busy = true;
+        UseWaitCursor = true;
+        _lblPlan.Visible = true;
+        _lblPlan.Text = "照風向重新規劃中…";
+        try
+        {
+            PlannedRoute?[] after = await Task.Run(() =>
+            {
+                PlannedRoute?[] result = new PlannedRoute?[before.Length];
+                for (int i = 0; i < before.Length; i++)
+                {
+                    result[i] = wind is null
+                        ? planner.Plan(before[i].Start, before[i].End)
+                        : planner.PlanBothSeasons(before[i].Start, before[i].End, wind, season);
+                }
+                return result;
+            });
+            if (IsDisposed) return;
+
+            // 計算期間航線沒有被改過、風向設定也沒有再換，而且每一段都規劃得出來，才套用
+            bool unchanged = _legs.Count == before.Length && season == _season && (wind is not null) == _considerWind;
+            for (int i = 0; unchanged && i < before.Length; i++)
+            {
+                unchanged = ReferenceEquals(_legs[i], before[i]) && after[i] is not null;
+            }
+            if (unchanged)
+            {
+                for (int i = 0; i < before.Length; i++)
+                {
+                    after[i]!.StartName = before[i].StartName;
+                    after[i]!.EndName = before[i].EndName;
+                    _legs[i] = after[i]!;
+                }
+                _planAlong = null;
+                UpdateRouteWind();
+            }
+        }
+        catch (Exception ex)
+        {
+            // async void 的例外沒人接，會跳出 WinForms 的錯誤視窗，所以在這裡接住；原本的航線留著
+            if (IsDisposed) return;
+            _mapView.Busy = false;
+            UseWaitCursor = false;
+            MessageBox.Show(this, "重新規劃航線時發生錯誤：\n\n" + ex.Message,
+                "規劃航線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _planning = false;
+            if (!IsDisposed)
+            {
+                _mapView.Busy = false;
+                UseWaitCursor = false;
+                UpdateStatus();
+            }
+        }
+    }
+
+    /// <summary>規劃航線、季節或「考慮風向」改了以後，重新找出逆風的航段。</summary>
     private void UpdateRouteWind()
     {
-        if (_wind is null || _legs.Count == 0)
+        if (_wind is null || !_considerWind || _legs.Count == 0)
         {
             _routeWind = null;
             _routeWindOther = null;
@@ -776,7 +888,7 @@ public class MainForm : Form
         _settings.RouteManagerWidth = b.Width;
         _settings.RouteManagerHeight = b.Height;
         _settings.RouteManagerColumns = form.GetColumnWidths();
-        _settings.Save();
+        SaveSettings();
     }
 
     /// <summary>「外觀」子選單的一個選項。目前的設定打勾；換了之後要重新開程式才會套用。</summary>
@@ -793,7 +905,7 @@ public class MainForm : Form
         {
             if (_settings.ColorMode == mode) return;
             _settings.ColorMode = mode;
-            _settings.Save();
+            SaveSettings();
             foreach (ToolStripMenuItem other in parent.DropDownItems)
             {
                 other.Checked = other == item;
@@ -844,8 +956,38 @@ public class MainForm : Form
         if (!_mapView.ShipPosition.HasValue) return;
         WorldPoint p = _mapView.ShipPosition.Value;
         if (p.X == _settings.LastX && p.Y == _settings.LastY) return;
-        _settings.LastX = p.X;
-        _settings.LastY = p.Y;
+        SaveSettings();
+    }
+
+    /// <summary>
+    /// 把目前的狀態（視窗位置、選單上打勾的選項、風向、船的位置…）寫回設定再存檔。
+    /// 每次存檔都走這裡：不然執行中改的選項只有關閉程式時才寫回設定，
+    /// 中途存檔（例如規劃航線後記住港口）存到的是舊的值，程式被強制結束或斷電就沒了。
+    /// </summary>
+    private void SaveSettings()
+    {
+        if (_settingsApplied) // 設定還沒套用到畫面上時（啟動途中），畫面上的是預設值，不能寫回去
+        {
+            Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            _settings.WindowX = b.X;
+            _settings.WindowY = b.Y;
+            _settings.WindowWidth = b.Width;
+            _settings.WindowHeight = b.Height;
+            _settings.TopMost = TopMost;
+            _settings.FollowShip = _mapView.FollowShip;
+            _settings.Scale = _mapView.ViewScale;
+            _settings.ShowHeadingLine = _mapView.ShowHeadingLine;
+            _settings.ShowSpeed = _mapView.ShowSpeed;
+            _settings.ShowRoutes = _mapView.ShowRoutes;
+            _settings.Season = _season;
+            _settings.ConsiderWind = _considerWind;
+            _settings.SpeedCorner = _mapView.SpeedCorner;
+            if (_mapView.ShipPosition.HasValue)
+            {
+                _settings.LastX = _mapView.ShipPosition.Value.X;
+                _settings.LastY = _mapView.ShipPosition.Value.Y;
+            }
+        }
         _settings.Save();
     }
 
@@ -859,8 +1001,9 @@ public class MainForm : Form
         dlg.TopMost = TopMost;
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
-            _settings.PlanStart = dlg.StartLabel;
-            PlanRoute(dlg.Start, dlg.End, dlg.StartLabel, dlg.EndLabel, append: false);
+            // 記住起點，下次打開時還在。起點是船的位置時不記（記空字串）：下次打開時用當時船的位置
+            _settings.PlanStart = dlg.Start == _mapView.ShipPosition ? "" : dlg.StartLabel;
+            PlanRoute(dlg.Start, dlg.End, dlg.StartLabel, dlg.EndLabel, append: false, fromDialog: true);
         }
     }
 
@@ -969,7 +1112,7 @@ public class MainForm : Form
             _settings.RecentPorts.RemoveAt(_settings.RecentPorts.Count - 1);
         }
         // 馬上存：船停在港口不動時，定時存檔（只在位置有變時存）不會存到這裡
-        _settings.Save();
+        SaveSettings();
     }
 
     private void UndoLastLeg()
@@ -979,7 +1122,7 @@ public class MainForm : Form
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     private void UpdateMouseLabel(WorldPoint? p)
@@ -1036,7 +1179,9 @@ public class MainForm : Form
     }
 
     /// <param name="append">true：加在現有規劃航線的後面；false：取代原本的規劃航線。</param>
-    private async void PlanRoute(WorldPoint start, WorldPoint end, string startName, string endName, bool append)
+    /// <param name="fromDialog">是不是從「規劃航線」視窗來的（改風向時會照新的風向重新規劃）。</param>
+    private async void PlanRoute(WorldPoint start, WorldPoint end, string startName, string endName, bool append,
+        bool fromDialog = false)
     {
         if (_planning)
         {
@@ -1066,7 +1211,12 @@ public class MainForm : Form
             PlannedRoute? route;
             try
             {
-                route = await Task.Run(() => planner.Plan(start, end));
+                // 考慮風向時：找這一季最省時間的航線，另一季明顯不同的話一起算出來
+                WindMap? wind = _considerWind ? _wind : null;
+                Season season = _season;
+                route = await Task.Run(() => wind is null
+                    ? planner.Plan(start, end)
+                    : planner.PlanBothSeasons(start, end, wind, season));
             }
             catch (Exception ex)
             {
@@ -1102,7 +1252,11 @@ public class MainForm : Form
             {
                 route.StartName = startName;
                 route.EndName = endName;
-                if (!append) _legs.Clear();
+                if (!append)
+                {
+                    _legs.Clear();
+                    _legsFromDialog = fromDialog;
+                }
                 _legs.Add(route);
                 _planAlong = null;
                 UpdateRouteWind();
@@ -1118,7 +1272,7 @@ public class MainForm : Form
             {
                 _mapView.Busy = false;
                 UseWaitCursor = false;
-                UpdateTitleAndStatus();
+                UpdateStatus();
             }
         }
     }
@@ -1127,10 +1281,11 @@ public class MainForm : Form
     private void ClearPlannedRoute()
     {
         _legs.Clear();
+        _legsFromDialog = false;
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     /// <summary>把規劃航線存成一段「我的最愛」航線，之後在航線管理裡看得到，也會存檔。</summary>
@@ -1167,10 +1322,11 @@ public class MainForm : Form
         }
         _routes.AddFinished(route);
         _legs.Clear();
+        _legsFromDialog = false;
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
         ShowRouteManager();
         _routeManager!.SelectAndRename(route); // 已經自動取名，直接進入改名，按 Enter 就是接受這個名字
     }
@@ -1206,16 +1362,20 @@ public class MainForm : Form
         RouteProgress? progress = _lastReadTime != 0 && _mapView.ShipPosition is WorldPoint ship
             ? RouteProgress.Measure(_legs, ship, _planAlong)
             : null;
+        // 另一個季節走別條路明顯比較快（地圖上的紫色虛線）
+        bool hasAlternate = _considerWind && _legs.Exists(leg => leg.Alternate is not null);
+        string alternateNote = hasAlternate ? $"；{otherName}走紫色的航線比較快" : "";
+
         if (progress is not RouteProgress now)
         {
             string wind = _routeWind is not null && _routeWindOther is not null
                 ? $"，逆風 {seasonName} {_routeWind.HeadwindLength:0}／{otherName} {_routeWindOther.HeadwindLength:0}"
                 : "";
-            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}";
+            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}{alternateNote}";
         }
         _planAlong = now.Along;
 
-        // 考慮逆風以後，剩下的路相當於多遠（逆風的航段船速只剩 72%，所以會變長）。沒有風向資料時就是剩餘距離
+        // 考慮風向以後，剩下的路相當於多遠（偏向逆風的航段船速變慢，所以會變長）。沒有風向資料時就是剩餘距離
         double effective = now.Remaining, effectiveOther = now.Remaining;
         string text = $"規劃航線{legs}：{path}，剩餘 {now.Remaining:0}／全程 {now.Total:0}";
         if (_routeWind is not null && _routeWindOther is not null)
@@ -1223,12 +1383,13 @@ public class MainForm : Form
             (double headwind, double rest) = _routeWind.Remaining(now.Along);
             effective = now.OffRoute + rest;
             effectiveOther = now.OffRoute + _routeWindOther.Remaining(now.Along).Effective;
-            text += $"，{seasonName}逆風 {headwind:0}";
+            // 前面還有多長的逆風（已經走過的不算）；沒有就不顯示
+            if (headwind >= 1) text += $"，前面還有逆風 {headwind:0}（{seasonName}）";
         }
 
         if (_speed.HasValue && _speed.UnitsPerSecond > 0.3 && !_mapView.Stale)
         {
-            // 目前的船速可能就是逆風下的船速：先換算回不是逆風時的船速
+            // 目前的船速可能就是逆風下的船速：先換算回順風時的船速
             double baseSpeed = _speed.UnitsPerSecond / CurrentWindSpeedRatio();
             text += $"，照目前船速約 {FormatDuration(effective / baseSpeed)}";
             if (Math.Abs(effectiveOther - effective) > effective * 0.05)
@@ -1236,22 +1397,22 @@ public class MainForm : Form
                 text += $"（{otherName}約 {FormatDuration(effectiveOther / baseSpeed)}）";
             }
         }
-        return text;
+        return text + alternateNote;
     }
 
     /// <summary>
-    /// 船現在的船速，是不是逆風時的幾成（縱帆逆風 0.72，其他 1）。
+    /// 船現在的船速，是順風時的幾成（縱帆：順風到側風是 1，正逆風 0.72）。
     /// 用船現在的航向和所在海域在選定季節的風向判斷；不知道航向、沒有風向資料、
     /// 或船在不處理風向的地方（地中海、黑海…）時當成 1。
     /// </summary>
     private double CurrentWindSpeedRatio()
     {
-        if (_wind is null || _motion.HeadingDegrees is not double heading || _mapView.ShipPosition is not WorldPoint ship
+        if (_wind is null || !_considerWind || _motion.HeadingDegrees is not double heading || _mapView.ShipPosition is not WorldPoint ship
             || _wind.DirectionAt(ship.X, ship.Y, _season) is not double windTo)
         {
             return 1.0;
         }
-        return Sail.ForeAndAftSpeed(Sail.Classify(heading, windTo));
+        return Sail.ForeAndAftSpeed(Sail.AngleOffWind(heading, windTo));
     }
 
     private static string FormatDuration(double seconds)
@@ -1274,7 +1435,7 @@ public class MainForm : Form
             _capture.OffsetFromRightBottom = new Point(dlg.OffsetX, dlg.OffsetY);
             _timer.Interval = Math.Max(100, dlg.IntervalMs);
             _filter.Reset(); // 截圖位置改了，重新確認座標
-            _settings.Save();
+            SaveSettings();
         }
     }
 
@@ -1282,15 +1443,10 @@ public class MainForm : Form
 
     #region 其他
 
-    private void UpdateTitleAndStatus()
+    private void UpdateStatus()
     {
         string scale = (_mapView.ViewScale * 100).ToString("0.0") + "%";
         WorldPoint? ship = _mapView.ShipPosition;
-
-        // 標題列格式和原版相同：座標 - (比例) - 程式名稱
-        Text = ship.HasValue
-            ? $"{ship.Value.X},{ship.Value.Y} - ({scale}) - {AppName}"
-            : $"({scale}) - {AppName}";
 
         // 還沒讀到座標時，船的位置是上次關閉時存下來的，標明一下
         string lastNote = ship.HasValue && _lastReadTime == 0 ? "（上次位置）" : "";
@@ -1335,7 +1491,8 @@ public class MainForm : Form
             "　＋／－　　　　　　放大縮小\n" +
             "　F1　　　　　　　　視窗置頂\n\n" +
             "規劃航線時，附近有港口會自動對準港口；座標標籤只註明附近的港口，不會移動。\n" +
-            "規劃航線上橘色的部分是逆風（縱帆），用右鍵選單的「季節風向」選夏季或冬季。\n" +
+            "規劃航線會照風向找最省時間的路（以帆船為準），橘色的部分是逆風；\n" +
+            "用右鍵選單的「風向」選夏季、冬季，或不考慮風向。另一季走別條路明顯比較快時，用紫色虛線畫出來。\n" +
             "還不知道船的位置時，Shift＋雙擊會從座標標籤的位置出發。",
             "操作說明", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
@@ -1400,25 +1557,7 @@ public class MainForm : Form
             RememberRouteManagerLayout(_routeManager); // 主視窗關閉時航線管理還開著
         }
 
-        Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-        _settings.WindowX = b.X;
-        _settings.WindowY = b.Y;
-        _settings.WindowWidth = b.Width;
-        _settings.WindowHeight = b.Height;
-        _settings.TopMost = TopMost;
-        _settings.FollowShip = _mapView.FollowShip;
-        _settings.Scale = _mapView.ViewScale;
-        _settings.ShowHeadingLine = _mapView.ShowHeadingLine;
-        _settings.ShowSpeed = _mapView.ShowSpeed;
-        _settings.ShowRoutes = _mapView.ShowRoutes;
-        _settings.Season = _season;
-        _settings.SpeedCorner = _mapView.SpeedCorner;
-        if (_mapView.ShipPosition.HasValue)
-        {
-            _settings.LastX = _mapView.ShipPosition.Value.X;
-            _settings.LastY = _mapView.ShipPosition.Value.Y;
-        }
-        _settings.Save();
+        SaveSettings();
 
         _capture.Dispose();
         base.OnFormClosing(e);

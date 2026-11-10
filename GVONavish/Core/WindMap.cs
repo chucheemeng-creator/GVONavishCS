@@ -40,8 +40,8 @@ public sealed class WindMap
     private const int MaxGridSide = 4096;
     private const int MaxAreas = 254;
 
-    /// <summary>格子資料裡表示「這裡不處理風向」的值。</summary>
-    private const byte NoWind = 255;
+    /// <summary>表示「這裡不處理風向」的海域編號（<see cref="AreaAt"/>）。</summary>
+    public const int NoWind = 255;
 
     private readonly int _width, _height;
     private readonly byte[] _areaOfCell;      // 每一格屬於哪個海域
@@ -66,19 +66,29 @@ public sealed class WindMap
     /// </summary>
     public double? DirectionAt(double worldX, double worldY, Season season)
     {
-        int area = AreaAt(worldX, worldY);
-        if (area == NoWind) return null;
-        return season == Season.Summer ? _summer[area] : _winter[area];
+        return DirectionOfArea(AreaAt(worldX, worldY), season);
     }
 
-    // 這個位置屬於第幾個海域（0 開始）；NoWind 表示不處理風向
-    private int AreaAt(double worldX, double worldY)
+    /// <summary>
+    /// 這個位置屬於第幾個海域（0 開始）；<see cref="NoWind"/> 表示不處理風向。同一個海域的風向相同。
+    /// </summary>
+    public int AreaAt(double worldX, double worldY)
     {
         int cx = (int)(World.WrapX(worldX) * _width / World.Width);
         int cy = (int)(worldY * _height / World.Height);
         cx = Math.Clamp(cx, 0, _width - 1);
         cy = Math.Clamp(cy, 0, _height - 1);
         return _areaOfCell[cy * _width + cx];
+    }
+
+    /// <summary>
+    /// 第 area 個海域的風吹往哪個方向（度）；<see cref="NoWind"/> 回傳 null。
+    /// 規劃航線時先用 <see cref="AreaAt"/> 查海域，再查風向，比每次都用座標查快。
+    /// </summary>
+    public double? DirectionOfArea(int area, Season season)
+    {
+        if (area == NoWind) return null;
+        return season == Season.Summer ? _summer[area] : _winter[area];
     }
 
     /// <summary>讀取風向資料檔。檔案不存在、格式不對或內容不合理時回傳 null。</summary>

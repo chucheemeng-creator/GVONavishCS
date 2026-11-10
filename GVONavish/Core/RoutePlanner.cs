@@ -9,7 +9,14 @@
 //      太靠近海岸的格子會「比較貴」，所以航線會和海岸保持一點距離，但窄的海峽還是過得去。
 //   3. 找到的路徑是一格一格的鋸齒，最後拉直：能直線到達的點就直接連過去，
 //      只在需要轉彎的地方留下轉折點，跟實際開船的走法比較像。
-//   4. 像拉橡皮筋一樣收緊：每個轉折點往前後兩點的連線方向移，移到快碰到陸地為止。
+//   4. 像拉橡皮筋一樣收緊：每個轉折點往前後兩點的連線方向移，移到快碰到陸地為止；
+//      再沿著航線往前後滑，滑到直線剛好能繞過陸地（海岬）的位置。
+//
+// 考慮風向時（Plan 有給風向資料）：
+//   - A* 找的是「最省時間」的路：每一步的成本 = 距離 ÷ 船速比例（Sail.ForeAndAftSpeed：
+//     順風到側風是 1，正逆風 0.72），所以會繞開逆風的海域，但只在繞路省下的時間比多走的路多時才繞。
+//   - 拉直、收緊時多一個條件：改成直線以後不能比原本慢（否則會把繞開逆風的路又拉回逆風裡）。
+//   - 沒有給風向資料時，和以前完全一樣：找最短的路。
 
 using System;
 using System.Collections.Generic;
@@ -29,6 +36,24 @@ public class PlannedRoute
 
     public WorldPoint Start { get; set; }
     public WorldPoint End { get; set; }
+
+    /// <summary>
+    /// 另一個季節的航線：只有在另一個季節走它明顯比較快時才有（<see cref="RoutePlanner.PlanBothSeasons"/>），否則是 null。
+    /// </summary>
+    public PlannedRoute? Alternate { get; set; }
+
+    /// <summary>
+    /// 換季：把另一個季節的航線換成主要的航線（原本的變成另一個季節的）。沒有另一條航線時回傳自己。
+    /// </summary>
+    public PlannedRoute SwapAlternate()
+    {
+        if (Alternate is not PlannedRoute other) return this;
+        Alternate = null;
+        other.Alternate = this;
+        other.StartName = StartName;
+        other.EndName = EndName;
+        return other;
+    }
 
     /// <summary>起點、終點的名稱（港口名稱或座標文字），顯示用。</summary>
     public string StartName { get; set; } = "";
@@ -52,6 +77,22 @@ public class RoutePlanner
     /// <summary>拉直航線時，直線要和海岸保持的距離（格）。窄海峽會自動放寬。</summary>
     private const int SmoothClearance = 3;
 
+    /// <summary>
+    /// 考慮風向時，拉直後的直線可以比方格上的路徑慢多少還接受。
+    /// 方格只有 16 個方向，A* 在逆風時會找出左右來回折的路（比正面頂風快 1 ~ 3%），
+    /// 沒有這個寬限的話，每一折都會留下來變成轉折點。
+    /// </summary>
+    private const double SmoothTimeSlack = 1.03;
+
+    /// <summary>另一個季節的航線要比原本的航線省這麼多時間（3%），才值得另外畫出來。</summary>
+    public const double AlternateMinSaving = 0.03;
+
+    // 這一次規劃用的風向（null = 不考慮風向）
+    private WindMap? _wind;
+    private Season _season;
+    // 每個海域、每個方向（Moves 的順序）走一步要乘的倍數：1 ÷ 船速比例。最後一列（NoWind）都是 1
+    private readonly float[,] _moveCost = new float[WindMap.NoWind + 1, 16];
+
     public RoutePlanner(SeaMap map)
     {
         _map = map;
@@ -63,10 +104,57 @@ public class RoutePlanner
     }
 
     /// <summary>
+    /// 規劃兩個季節的航線：回傳 season 這一季最省時間的航線；
+    /// 另一個季節如果走別條路明顯比較快（省 3% 以上），放在 <see cref="PlannedRoute.Alternate"/>。
+    /// 找不到航線時回傳 null。
+    /// </summary>
+    public PlannedRoute? PlanBothSeasons(WorldPoint start, WorldPoint end, WindMap wind, Season season)
+    {
+        PlannedRoute? shortest = PlanOnce(start, end, null, season);
+        if (shortest is null) return null;
+
+        Season otherSeason = season == Season.Summer ? Season.Winter : Season.Summer;
+        PlannedRoute route = Fastest(start, end, wind, season, shortest);
+        PlannedRoute other = Fastest(start, end, wind, otherSeason, shortest);
+        if (!ReferenceEquals(route, other)
+            && EffectiveLength(other, wind, otherSeason) < EffectiveLength(route, wind, otherSeason) * (1 - AlternateMinSaving))
+        {
+            route.Alternate = other;
+        }
+        return route;
+    }
+
+    /// <summary>
     /// 規劃航線。找不到（例如起點在內陸湖）時回傳 null。
     /// </summary>
-    public PlannedRoute? Plan(WorldPoint start, WorldPoint end)
+    /// <param name="wind">風向資料：有給的話找最省時間的航線（以縱帆為準）；null 則找最短的航線。</param>
+    /// <param name="season">用哪個季節的風向（wind 是 null 時沒有作用）。</param>
+    public PlannedRoute? Plan(WorldPoint start, WorldPoint end, WindMap? wind = null, Season season = Season.Summer)
     {
+        PlannedRoute? shortest = PlanOnce(start, end, null, season);
+        if (shortest is null || wind is null) return shortest;
+        return Fastest(start, end, wind, season, shortest);
+    }
+
+    // 這一季最省時間的航線。
+    // 拉直的時候為了少幾個轉折點，可以比方格上的路徑慢一點；萬一因此沒有比「最短的航線」快，就用最短的那一條
+    private PlannedRoute Fastest(WorldPoint start, WorldPoint end, WindMap wind, Season season, PlannedRoute shortest)
+    {
+        PlannedRoute? route = PlanOnce(start, end, wind, season);
+        if (route is null || EffectiveLength(shortest, wind, season) <= EffectiveLength(route, wind, season))
+        {
+            return shortest;
+        }
+        return route;
+    }
+
+    // 考慮風向以後，這條航線相當於多遠（＝需要的時間）
+    private static double EffectiveLength(PlannedRoute route, WindMap wind, Season season) =>
+        new RouteWind([route], wind, season).EffectiveLength;
+
+    private PlannedRoute? PlanOnce(WorldPoint start, WorldPoint end, WindMap? wind, Season season)
+    {
+        SetWind(wind, season);
         (int sx, int sy) = _map.CellFromWorld(start.X, start.Y);
         (int ex, int ey) = _map.CellFromWorld(end.X, end.Y);
 
@@ -95,6 +183,9 @@ public class RoutePlanner
             ux += d;
             pts.Add((ux, cells[i] / _map.Width));
         }
+
+        // 考慮風向時：走到路徑上每一點為止花的時間（拉直時用來比較）
+        _pathTime = wind is null ? null : PathTimes(cells);
 
         List<int> keep = Smooth(pts);
 
@@ -201,6 +292,7 @@ public class RoutePlanner
 
             int cx = cur % w, cy = cur / w;
             float gCur = _g[cur];
+            int area = AreaOfCell(cx, cy); // 這一格的風向，往 16 個方向走都用它
             for (int m = 0; m < Moves.Length; m++)
             {
                 (int dx, int dy, float len) = Moves[m];
@@ -219,7 +311,7 @@ public class RoutePlanner
 
                 int coast = _map.CoastDistance[next];
                 float penalty = coast < CoastPenalty.Length ? CoastPenalty[coast] : 0f;
-                float g = gCur + len * (1f + penalty);
+                float g = gCur + len * (1f + penalty) * _moveCost[area, m];
                 if (g < _g[next])
                 {
                     _g[next] = g;
@@ -229,6 +321,79 @@ public class RoutePlanner
             }
         }
         return null;
+    }
+
+    // 設定這一次規劃用的風向，算好每個海域往 16 個方向走一步的倍數
+    private void SetWind(WindMap? wind, Season season)
+    {
+        _wind = wind;
+        _season = season;
+        for (int area = 0; area <= WindMap.NoWind; area++)
+        {
+            double? windTo = area < (wind?.AreaCount ?? 0) ? wind!.DirectionOfArea(area, season) : null;
+            for (int m = 0; m < Moves.Length; m++)
+            {
+                _moveCost[area, m] = windTo is double to
+                    ? (float)(1.0 / Sail.ForeAndAftSpeed(Sail.AngleOffWind(HeadingOf(Moves[m].Dx, Moves[m].Dy), to)))
+                    : 1f;
+            }
+        }
+    }
+
+    // 格子 (x, y) 屬於哪個海域（不考慮風向時一律是 NoWind：倍數都是 1）
+    private int AreaOfCell(int x, int y)
+    {
+        if (_wind is null) return WindMap.NoWind;
+        return _wind.AreaAt((x + 0.5) * World.Width / _map.Width, (y + 0.5) * World.Height / _map.Height);
+    }
+
+    // 往 (dx, dy) 走的航向：0 = 北，90 = 東（Y 向下）
+    private static double HeadingOf(double dx, double dy)
+    {
+        double heading = Math.Atan2(dx, -dy) * 180.0 / Math.PI;
+        return heading < 0 ? heading + 360 : heading;
+    }
+
+    // 走到路徑上每一格為止花的時間（距離 ÷ 船速比例，不含靠近海岸的加成）
+    private double[] PathTimes(List<int> cells)
+    {
+        int w = _map.Width;
+        double[] time = new double[cells.Count];
+        for (int i = 1; i < cells.Count; i++)
+        {
+            int px = cells[i - 1] % w, py = cells[i - 1] / w;
+            int dx = cells[i] % w - px, dy = cells[i] / w - py;
+            if (dx > w / 2) dx -= w; else if (dx < -w / 2) dx += w;
+            int m = Array.FindIndex(Moves, v => v.Dx == dx && v.Dy == dy);
+            time[i] = time[i - 1] + Moves[m].Len * _moveCost[AreaOfCell(px, py), m];
+        }
+        return time;
+    }
+
+    // 目前這條路徑走到每一點為止花的時間；不考慮風向時是 null
+    private double[]? _pathTime;
+
+    /// <summary>
+    /// 沿著直線 a → b 走要花的時間（距離 ÷ 船速比例，單位是格）。座標是格子，X 是攤開的。
+    /// </summary>
+    private double LineTime((double X, double Y) a, (double X, double Y) b)
+    {
+        double dx = b.X - a.X, dy = b.Y - a.Y;
+        double length = Math.Sqrt(dx * dx + dy * dy);
+        if (_wind is null || length <= 0) return length;
+
+        double heading = HeadingOf(dx, dy);
+        double cellW = (double)World.Width / _map.Width, cellH = (double)World.Height / _map.Height;
+        int pieces = (int)Math.Ceiling(length / 2.0); // 每 2 格取一點（海域最小也有幾十格）
+        double time = 0;
+        for (int k = 0; k < pieces; k++)
+        {
+            double f = (k + 0.5) / pieces;
+            double? windTo = _wind.DirectionAt((a.X + dx * f + 0.5) * cellW, (a.Y + dy * f + 0.5) * cellH, _season);
+            double speed = windTo is double to ? Sail.ForeAndAftSpeed(Sail.AngleOffWind(heading, to)) : 1.0;
+            time += length / pieces / speed;
+        }
+        return time;
     }
 
     // 第一次碰到這一格時，初始化它的資料
@@ -323,7 +488,8 @@ public class RoutePlanner
             changed = false;
             for (int k = 1; k < keep.Count - 1; k++)
             {
-                if (LineIsClear(P(pts[keep[k - 1]]), P(pts[keep[k + 1]]), SmoothClearance))
+                if (LineIsClear(P(pts[keep[k - 1]]), P(pts[keep[k + 1]]), SmoothClearance)
+                    && NotSlower(pts, keep[k - 1], keep[k + 1]))
                 {
                     keep.RemoveAt(k);
                     changed = true;
@@ -338,6 +504,13 @@ public class RoutePlanner
 
     private static (double X, double Y) P((double X, int Y) q) => (q.X, q.Y);
 
+    // 從路徑的第 i 點直線走到第 j 點，會不會比沿著路徑走慢（考慮風向時才檢查）
+    private bool NotSlower(List<(double X, int Y)> pts, int i, int j)
+    {
+        if (_pathTime is null) return true;
+        return LineTime(P(pts[i]), P(pts[j])) <= (_pathTime[j] - _pathTime[i]) * SmoothTimeSlack;
+    }
+
     /// <summary>從 anchor 出發，能直線到達的最遠的點。</summary>
     private int FarthestVisible(List<(double X, int Y)> pts, int anchor)
     {
@@ -348,12 +521,12 @@ public class RoutePlanner
         int stride = Math.Max(1, span / 256);
         for (int j = n - 1; j > anchor + 1; j -= stride)
         {
-            if (LineIsClear(P(pts[anchor]), P(pts[j]), SmoothClearance))
+            if (LineIsClear(P(pts[anchor]), P(pts[j]), SmoothClearance) && NotSlower(pts, anchor, j))
             {
                 int best = j;
                 for (int k = j + 1; k < n && k < j + stride; k++)
                 {
-                    if (LineIsClear(P(pts[anchor]), P(pts[k]), SmoothClearance)) best = k;
+                    if (LineIsClear(P(pts[anchor]), P(pts[k]), SmoothClearance) && NotSlower(pts, anchor, k)) best = k;
                 }
                 return best;
             }
@@ -367,7 +540,7 @@ public class RoutePlanner
             int c = _map.CoastDistance[pts[j].Y * _map.Width + _map.WrapCellX((int)pts[j].X)];
             if (c < minCoastOnPath) minCoastOnPath = c;
             int need = Math.Min(SmoothClearance, minCoastOnPath);
-            if (LineIsClear(P(pts[anchor]), P(pts[j]), need))
+            if (LineIsClear(P(pts[anchor]), P(pts[j]), need) && NotSlower(pts, anchor, j))
             {
                 bestNarrow = j;
             }
@@ -395,8 +568,11 @@ public class RoutePlanner
                 int needB = SegmentClearance(w, b);
                 int needAB = Math.Min(needA, needB);
 
+                // 考慮風向時：經過這個轉折點要花的時間。移動或拿掉轉折點以後不能比這個慢
+                double timeNow = _wind is null ? 0 : LineTime(a, w) + LineTime(w, b);
+
                 // 前後兩點已經能直接相連：這個轉折點多餘
-                if (LineIsClear(a, b, needAB))
+                if (LineIsClear(a, b, needAB) && (_wind is null || LineTime(a, b) <= timeNow))
                 {
                     p.RemoveAt(k);
                     k--;
@@ -417,18 +593,61 @@ public class RoutePlanner
                 {
                     double mid = (lo + hi) / 2;
                     var c = (X: w.X + (target.X - w.X) * mid, Y: w.Y + (target.Y - w.Y) * mid);
-                    if (LineIsClear(a, c, needA) && LineIsClear(c, b, needB)) lo = mid;
+                    if (LineIsClear(a, c, needA) && LineIsClear(c, b, needB)
+                        && (_wind is null || LineTime(a, c) + LineTime(c, b) <= timeNow)) lo = mid;
                     else hi = mid;
                 }
                 double dist = Math.Sqrt((target.X - w.X) * (target.X - w.X) + (target.Y - w.Y) * (target.Y - w.Y)) * lo;
                 if (dist > 0.25)
                 {
-                    p[k] = (w.X + (target.X - w.X) * lo, w.Y + (target.Y - w.Y) * lo);
+                    w = (w.X + (target.X - w.X) * lo, w.Y + (target.Y - w.Y) * lo);
+                    p[k] = w;
+                    moved = true;
+                    if (_wind is not null) timeNow = LineTime(a, w) + LineTime(w, b);
+                }
+
+                // 沿著前後兩段滑動：轉折點在開闊的海上、被遠處的陸地（例如海岬）擋住時，
+                // 往連線的方向移不動（一移，另一段就會切到陸地），要沿著航線往陸地那一頭滑過去，
+                // 滑到直線剛好能繞過陸地的位置。兩種滑法都只會讓航線變短。
+                if (Slide(p, k, a, b, towardPrevious: true, needB, timeNow)
+                    || Slide(p, k, a, b, towardPrevious: false, needA, timeNow))
+                {
                     moved = true;
                 }
             }
             if (!moved) break;
         }
+    }
+
+    /// <summary>
+    /// 把第 k 個轉折點沿著航線滑向前一點（towardPrevious）或後一點，能滑多遠就滑多遠：
+    /// 滑向前一點時，「新位置 → 後一點」的直線要走得通；滑向後一點時，「前一點 → 新位置」要走得通。
+    /// 有移動就回傳 true。
+    /// </summary>
+    /// <param name="need">新的那一段直線要保持的離岸距離（和原本那一段相同）。</param>
+    /// <param name="timeNow">考慮風向時：目前經過這個轉折點要花的時間，滑動以後不能比它慢。</param>
+    private bool Slide(List<(double X, double Y)> p, int k, (double X, double Y) a, (double X, double Y) b,
+        bool towardPrevious, int need, double timeNow)
+    {
+        var w = p[k];
+        var toward = towardPrevious ? a : b;
+        var other = towardPrevious ? b : a;
+        double dx = toward.X - w.X, dy = toward.Y - w.Y;
+
+        // 二分法：最多滑到離目標點還有一點距離的地方（滑到底的話，這個轉折點就多餘了，由上面的檢查拿掉）
+        double lo = 0, hi = 0.98;
+        for (int it = 0; it < 12; it++)
+        {
+            double mid = (lo + hi) / 2;
+            var c = (X: w.X + dx * mid, Y: w.Y + dy * mid);
+            bool ok = LineIsClear(c, other, need)
+                && (_wind is null || LineTime(a, c) + LineTime(c, b) <= timeNow);
+            if (ok) lo = mid;
+            else hi = mid;
+        }
+        if (Math.Sqrt(dx * dx + dy * dy) * lo <= 0.25) return false;
+        p[k] = (w.X + dx * lo, w.Y + dy * lo);
+        return true;
     }
 
     // 這一段直線目前能保持的離岸距離（3、2、1 或 0 格）
@@ -443,7 +662,9 @@ public class RoutePlanner
 
     /// <summary>
     /// 直線經過的每一格都是海，而且離海岸至少 need 格。
-    /// 兩端附近（need 格以內）只要求是海：端點本身可能就在海峽或港口邊，離岸本來就近。
+    /// 端點本身離岸就不到 need 格時（在海峽裡或港口邊），那一端附近（need 格以內）只要求是海。
+    /// 端點在開闊的海上時不放寬：不然收緊航線時，轉折點是前後兩段共同的端點，
+    /// 它附近都不檢查離岸距離，會被一路拉到貼著陸地的位置。
     /// </summary>
     /// <remarks>
     /// 用格子走訪（Amanatides–Woo）把線段真正碰到的每一格都查過。
@@ -466,18 +687,21 @@ public class RoutePlanner
         double tMaxX = dx > 0 ? (x + 1 - ux) / dx : dx < 0 ? (ux - x) / -dx : double.PositiveInfinity;
         double tMaxY = dy > 0 ? (y + 1 - uy) / dy : dy < 0 ? (uy - y) / -dy : double.PositiveInfinity;
 
+        // 哪一端附近可以放寬（端點本身離岸就不到 need 格）
+        bool looseA = CoastAt(a) < need, looseB = CoastAt(b) < need;
+
         double tEnter = 0;
         while (true)
         {
             double tExit = Math.Min(Math.Min(tMaxX, tMaxY), 1.0);
-            if (!CellIsClear(x, y, tEnter, tExit, length, need)) return false;
+            if (!CellIsClear(x, y, tEnter, tExit, length, need, looseA, looseB)) return false;
             if (tExit >= 1.0) return true;
 
             if (Math.Abs(tMaxX - tMaxY) < 1e-9)
             {
                 // 剛好穿過格子的角：角旁邊的兩格也算碰到
-                if (!CellIsClear(x + stepX, y, tExit, tExit, length, need)) return false;
-                if (!CellIsClear(x, y + stepY, tExit, tExit, length, need)) return false;
+                if (!CellIsClear(x + stepX, y, tExit, tExit, length, need, looseA, looseB)) return false;
+                if (!CellIsClear(x, y + stepY, tExit, tExit, length, need, looseA, looseB)) return false;
                 x += stepX;
                 y += stepY;
                 tMaxX += tDeltaX;
@@ -497,13 +721,22 @@ public class RoutePlanner
         }
     }
 
-    // 線段在 t = tEnter ~ tExit 經過格子 (x, y)：這格必須是海；離兩端超過 need 格的地方，還要離岸至少 need 格
-    private bool CellIsClear(int x, int y, double tEnter, double tExit, double length, int need)
+    // 線段在 t = tEnter ~ tExit 經過格子 (x, y)：這格必須是海，而且離岸至少 need 格；
+    // 可以放寬的那一端（looseA：起點，looseB：終點）附近 need 格以內，只要求是海
+    private bool CellIsClear(int x, int y, double tEnter, double tExit, double length, int need, bool looseA, bool looseB)
     {
         if (y < 0 || y >= _map.Height) return false;
         int i = y * _map.Width + _map.WrapCellX(x);
         if (!_map.IsSea[i]) return false;
-        bool nearEnd = tEnter * length <= need || (1.0 - tExit) * length <= need;
+        bool nearEnd = (looseA && tEnter * length <= need) || (looseB && (1.0 - tExit) * length <= need);
         return nearEnd || _map.CoastDistance[i] >= need;
+    }
+
+    // 這個點所在的格子離海岸幾格（座標是格子，整數是格子中心，X 是攤開的）
+    private int CoastAt((double X, double Y) p)
+    {
+        int x = _map.WrapCellX((int)Math.Floor(p.X + 0.5));
+        int y = Math.Clamp((int)Math.Floor(p.Y + 0.5), 0, _map.Height - 1);
+        return _map.CoastDistance[y * _map.Width + x];
     }
 }

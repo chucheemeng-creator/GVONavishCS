@@ -106,6 +106,49 @@ public class RoutePlannerTests
         Assert.Null(new RoutePlanner(Map).Plan(At("里斯本"), new WorldPoint(4000, 2300)));
     }
 
+    [Theory]
+    [InlineData("里斯本", "開普敦", "雅加達")]     // 繞過好望角以後應該直線到雅加達，不是先往東走一段再轉彎
+    [InlineData("雅加達", "開普敦", "里斯本")]
+    [InlineData("倫敦", "里斯本", "開普敦")]
+    [InlineData("里斯本", "開普敦", "卡利卡特")]
+    [InlineData("倫敦", "開普敦", "長崎")]
+    public void 直接走不會比中途靠港還遠(string from, string via, string to)
+    {
+        // 中途的港口就在航線會經過的海岬旁邊。直接規劃的航線如果比「分兩段、中途靠港」還長，
+        // 表示轉折點留在不該留的地方
+        double direct = Plan(from, to).Length;
+        double twoLegs = Plan(from, via).Length + Plan(via, to).Length;
+        Assert.True(direct <= twoLegs, $"{from} → {to} 直接走 {direct:0}，經過 {via} 反而只要 {twoLegs:0}");
+    }
+
+    [Theory]
+    [InlineData("里斯本", "開普敦")]
+    [InlineData("里斯本", "卡利卡特")]
+    [InlineData("巴拿馬", "利馬")]
+    [InlineData("雅加達", "里斯本")]
+    [InlineData("阿姆斯特丹", "開普敦")]
+    public void 繞過海岬時_和海岸保持三格的距離(string from, string to)
+    {
+        // 這幾條航線不經過窄海峽。離起點、終點 40 以上的地方，航線都要離岸至少 3 格（12 個座標單位）：
+        // 收緊航線時，轉折點不能被拉到貼著海岬
+        PlannedRoute route = Plan(from, to);
+        Vec2 first = route.Waypoints[0], last = route.Waypoints[^1];
+        for (int i = 1; i < route.Waypoints.Count; i++)
+        {
+            Vec2 a = route.Waypoints[i - 1], b = route.Waypoints[i];
+            double length = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+            for (double d = 0; d < length; d += 1.0)
+            {
+                double x = a.X + (b.X - a.X) * d / length, y = a.Y + (b.Y - a.Y) * d / length;
+                if (Math.Sqrt((x - first.X) * (x - first.X) + (y - first.Y) * (y - first.Y)) < 40) continue;
+                if (Math.Sqrt((x - last.X) * (x - last.X) + (y - last.Y) * (y - last.Y)) < 40) continue;
+                (int cx, int cy) = Map.CellFromWorld(x, y);
+                int coast = Map.CoastDistance[cy * Map.Width + Map.WrapCellX(cx)];
+                Assert.True(coast >= 3, $"{from} → {to}：航線在 {x:0}, {y:0} 離岸只有 {coast} 格");
+            }
+        }
+    }
+
     [Fact]
     public void 跨過地圖邊界_走近的那一邊_X連續不折回()
     {
@@ -142,6 +185,102 @@ public class RoutePlannerTests
         PlannedRoute? route = new RoutePlanner(Map).Plan(At("里斯本"), At("里斯本"));
         Assert.NotNull(route);
         Assert.InRange(route!.Length, 0.0, 40.0);
+    }
+
+    // ---- 考慮風向 ----
+
+    private static readonly WindMap Wind = TestFiles.WindMap;
+
+    private static double Time(PlannedRoute route, Season season) => new RouteWind([route], Wind, season).EffectiveLength;
+
+    [Theory]
+    [InlineData("里斯本", "聖多明哥")]
+    [InlineData("聖多明哥", "里斯本")]
+    [InlineData("里斯本", "開普敦")]
+    [InlineData("卡利卡特", "開普敦")]
+    [InlineData("麻六甲", "長崎")]
+    [InlineData("長崎", "麻六甲")]
+    [InlineData("里斯本", "倫敦")]
+    public void 考慮風向_不穿過陸地_不會比最短的航線慢(string from, string to)
+    {
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At(from), At(to))!;
+        foreach (Season season in new[] { Season.Summer, Season.Winter })
+        {
+            PlannedRoute route = planner.Plan(At(from), At(to), Wind, season)!;
+            string name = $"{from} → {to}（{season}）";
+            AssertStaysAtSea(route, name);
+            Assert.True(Time(route, season) <= Time(shortest, season) + 1e-6, name + "：比最短的航線還慢");
+            Assert.True(route.Length >= World.Distance(At(from), At(to)) - 1e-6, name + "：比直線還短");
+            Assert.InRange(route.Waypoints.Count, 2, 40); // 不會留下一堆來回折的轉折點
+        }
+    }
+
+    [Fact]
+    public void 考慮風向_夏天從里斯本到加勒比海_繞開西風帶比較快()
+    {
+        // 最短的路直接穿過往東吹的西風帶，一半以上是逆風；往南繞一點路比較長，但比較快
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At("里斯本"), At("聖多明哥"))!;
+        PlannedRoute route = planner.Plan(At("里斯本"), At("聖多明哥"), Wind, Season.Summer)!;
+        Assert.True(route.Length > shortest.Length + 50, "應該比最短的航線長");
+        Assert.True(Time(route, Season.Summer) < Time(shortest, Season.Summer) * 0.97, "應該省 3% 以上的時間");
+    }
+
+    [Fact]
+    public void 考慮風向_地中海裡不處理風向_和最短的航線一樣()
+    {
+        RoutePlanner planner = new(Map);
+        PlannedRoute shortest = planner.Plan(At("熱那亞"), At("伊斯坦堡"))!;
+        PlannedRoute route = planner.Plan(At("熱那亞"), At("伊斯坦堡"), Wind, Season.Winter)!;
+        Assert.InRange(route.Length / shortest.Length, 0.999, 1.001);
+    }
+
+    [Fact]
+    public void 考慮風向_用完以後_不考慮風向的結果不變()
+    {
+        RoutePlanner planner = new(Map);
+        double before = planner.Plan(At("里斯本"), At("聖多明哥"))!.Length;
+        planner.Plan(At("里斯本"), At("聖多明哥"), Wind, Season.Summer);
+        Assert.Equal(before, planner.Plan(At("里斯本"), At("聖多明哥"))!.Length, 6);
+    }
+
+    [Fact]
+    public void 兩個季節_另一季走別條路明顯比較快時_才有另一條航線()
+    {
+        RoutePlanner planner = new(Map);
+
+        // 里斯本到加勒比海：冬天的航線在夏天不夠快，夏天另外有一條
+        PlannedRoute winter = planner.PlanBothSeasons(At("里斯本"), At("聖多明哥"), Wind, Season.Winter)!;
+        Assert.NotNull(winter.Alternate);
+        Assert.True(Time(winter.Alternate!, Season.Summer) < Time(winter, Season.Summer) * (1 - RoutePlanner.AlternateMinSaving));
+        AssertStaysAtSea(winter.Alternate!, "里斯本 → 聖多明哥（夏季的另一條）");
+
+        // 地中海裡兩季一樣
+        Assert.Null(planner.PlanBothSeasons(At("熱那亞"), At("伊斯坦堡"), Wind, Season.Summer)!.Alternate);
+
+        // 到不了的地方
+        Assert.Null(planner.PlanBothSeasons(new WorldPoint(4000, 2300), At("里斯本"), Wind, Season.Summer));
+    }
+
+    [Fact]
+    public void 換季_主要的航線和另一條對調()
+    {
+        PlannedRoute main = new() { StartName = "甲", EndName = "乙", Length = 100 };
+        PlannedRoute other = new() { Length = 120 };
+        main.Alternate = other;
+
+        PlannedRoute swapped = main.SwapAlternate();
+        Assert.Same(other, swapped);
+        Assert.Same(main, swapped.Alternate);
+        Assert.Null(main.Alternate);
+        Assert.Equal("甲", swapped.StartName);   // 名稱跟著過去
+        Assert.Equal("乙", swapped.EndName);
+
+        Assert.Same(main, swapped.SwapAlternate()); // 再換一次就換回來
+
+        PlannedRoute single = new();
+        Assert.Same(single, single.SwapAlternate()); // 沒有另一條時不變
     }
 
     [Fact]

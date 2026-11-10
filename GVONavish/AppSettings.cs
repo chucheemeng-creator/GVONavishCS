@@ -33,8 +33,11 @@ public class AppSettings
     /// <summary>是否顯示航跡。</summary>
     public bool ShowRoutes { get; set; } = true;
 
-    /// <summary>規劃航線時用哪個季節的風向標出逆風。</summary>
+    /// <summary>規劃航線時用哪個季節的風向。</summary>
     public Season Season { get; set; } = Season.Summer;
+
+    /// <summary>規劃航線時考慮風向（找最省時間的航線、標出逆風）；false 則走最短的路。</summary>
+    public bool ConsiderWind { get; set; } = true;
 
     /// <summary>船速框的位置（0 右上、1 右下、2 左上、3 左下）。</summary>
     public ScreenCorner SpeedCorner { get; set; } = ScreenCorner.TopRight;

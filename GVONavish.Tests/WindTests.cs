@@ -59,28 +59,51 @@ public class WindTests : IDisposable
     // ---- 帆和風 ----
 
     [Theory]
-    [InlineData(90, 90, WindSide.Tail)]     // 往東走，風也往東吹
-    [InlineData(90, 130, WindSide.Tail)]    // 差 40 度還算順風
-    [InlineData(90, 140, WindSide.Side)]
-    [InlineData(90, 180, WindSide.Side)]    // 風從左邊橫著吹
-    [InlineData(90, 0, WindSide.Side)]
-    [InlineData(90, 220, WindSide.Side)]
-    [InlineData(90, 230, WindSide.Head)]    // 風吹來的方向和船頭差 40 度
-    [InlineData(90, 270, WindSide.Head)]    // 往東走，風往西吹：正面逆風
-    [InlineData(10, 190, WindSide.Head)]
-    [InlineData(350, 170, WindSide.Head)]   // 跨過 0 度
-    [InlineData(350, 10, WindSide.Tail)]
-    public void 風從哪一邊來(int heading, int windTo, WindSide expected)
+    [InlineData(90, 90, 0)]       // 往東走，風也往東吹：正順風
+    [InlineData(90, 130, 40)]
+    [InlineData(90, 180, 90)]     // 風橫著吹：側風
+    [InlineData(90, 0, 90)]
+    [InlineData(90, 270, 180)]    // 往東走，風往西吹：正逆風
+    [InlineData(10, 190, 180)]
+    [InlineData(350, 170, 180)]   // 跨過 0 度
+    [InlineData(350, 10, 20)]
+    [InlineData(10, 350, 20)]
+    public void 航向和風差幾度(int heading, int windTo, int expected)
     {
-        Assert.Equal(expected, Sail.Classify(heading, windTo));
+        Assert.Equal((double)expected, Sail.AngleOffWind(heading, windTo), 6);
+    }
+
+    [Theory]
+    [InlineData(0, 1.0)]          // 正順風
+    [InlineData(60, 1.0)]
+    [InlineData(90, 1.0)]         // 側風：縱帆和順風一樣快
+    [InlineData(135, 0.86)]       // 側風和正逆風的中間
+    [InlineData(180, 0.72)]       // 正逆風
+    public void 縱帆的船速_過了側風慢慢變慢(int angle, double expected)
+    {
+        Assert.Equal(expected, Sail.ForeAndAftSpeed(angle), 6);
     }
 
     [Fact]
-    public void 縱帆_只有逆風會慢()
+    public void 縱帆的船速_隨角度連續變化_不會跳一級()
     {
-        Assert.Equal(1.0, Sail.ForeAndAftSpeed(WindSide.Tail), 6);
-        Assert.Equal(1.0, Sail.ForeAndAftSpeed(WindSide.Side), 6);
-        Assert.Equal(0.72, Sail.ForeAndAftSpeed(WindSide.Head), 6);
+        double last = Sail.ForeAndAftSpeed(0);
+        for (double angle = 1; angle <= 180; angle++)
+        {
+            double speed = Sail.ForeAndAftSpeed(angle);
+            Assert.InRange(last - speed, 0.0, 0.004); // 每轉 1 度最多慢 0.4%
+            last = speed;
+        }
+    }
+
+    [Theory]
+    [InlineData(90, false)]
+    [InlineData(120, false)]      // 船速還有九成以上
+    [InlineData(125, true)]       // 少了一成以上：標成逆風
+    [InlineData(180, true)]
+    public void 船速少一成以上才標成逆風(int angle, bool expected)
+    {
+        Assert.Equal(expected, Sail.IsHeadwind(angle));
     }
 
     // ---- 風向資料檔 ----
@@ -224,6 +247,38 @@ public class WindTests : IDisposable
         Assert.Equal(500.0, route.Total, 6);
         Assert.Equal(200.0, route.HeadwindLength, 6);
         Assert.Equal(300.0 + 200.0 / 0.72, route.EffectiveLength, 6);
+    }
+
+    [Fact]
+    public void 航線_斜著逆風_船速照角度算()
+    {
+        WindMap wind = TwoAreas(0, 0, 0, 0); // 風往北吹
+        // 往東南走 45 度：和風差 135 度，船速 0.86，標成逆風
+        RouteWind route = new([Leg((1000, 4000), (1300, 4300))], wind, Season.Summer);
+        Assert.Equal(route.Total, route.HeadwindLength, 6);
+        Assert.Equal(route.Total / 0.86, route.EffectiveLength, 6);
+
+        // 往東偏南 20 度：和風差 110 度，船速 0.938，慢了一點但不標成逆風
+        double rad = 20 * Math.PI / 180;
+        RouteWind slight = new([Leg((1000, 4000), (1000 + 300 * Math.Cos(rad), 4000 + 300 * Math.Sin(rad)))], wind, Season.Summer);
+        Assert.Equal(0.0, slight.HeadwindLength, 6);
+        Assert.InRange(slight.EffectiveLength / slight.Total, 1.06, 1.07);
+    }
+
+    [Fact]
+    public void 航線_頭尾連到港口的一小段_不看風向()
+    {
+        WindMap wind = TwoAreas(270, 270, 270, 270); // 風往西吹
+        // 往西走 400（順風），最後 3 格是從海上連到港口的座標，方向剛好朝東（正逆風）
+        RouteWind route = new([Leg((1400, 4000), (1000, 4000), (1003, 4001))], wind, Season.Summer);
+        Assert.Equal(0.0, route.HeadwindLength, 6);
+        Assert.Empty(route.HeadwindRuns);
+        Assert.Equal(route.Total, route.EffectiveLength, 6);
+        Assert.Equal(0.0, route.Remaining(200).Headwind, 6);
+
+        // 夠長的航段照常算
+        RouteWind real = new([Leg((1400, 4000), (1000, 4000), (1020, 4000))], wind, Season.Summer);
+        Assert.Equal(20.0, real.HeadwindLength, 6);
     }
 
     [Fact]
