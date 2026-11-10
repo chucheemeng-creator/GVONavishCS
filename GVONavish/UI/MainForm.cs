@@ -39,9 +39,12 @@ public class MainForm : Form
     private static readonly string AppVersion =
         "C# 版 " + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
 
-    /// <summary>標題列顯示的名稱，帶版本號（回報問題時看得到是哪一版），例如「GVONavish 0.9.9」。</summary>
+    /// <summary>
+    /// 標題列的文字：程式名稱和版本號（回報問題時看得到是哪一版），例如「GVONavish v0.9.9」。
+    /// 座標看遊戲畫面或狀態列、比例在狀態列，標題列不重複顯示。
+    /// </summary>
     private static readonly string AppTitle =
-        AppName + " " + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
+        AppName + " v" + (typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "?");
 
     /// <summary>超過這麼久沒讀到座標，狀態列就顯示「看不到座標」。</summary>
     private const int CoordLostMs = 3000;
@@ -185,7 +188,7 @@ public class MainForm : Form
         _mapView.Dock = DockStyle.Fill;
         _mapView.Routes = _routes;
         _mapView.ContextMenuStrip = _menu;
-        _mapView.ViewChanged += (s, e) => UpdateTitleAndStatus();
+        _mapView.ViewChanged += (s, e) => UpdateStatus();
         _mapView.FollowShipChanged += (s, e) => _miFollow.Checked = _mapView.FollowShip;
         _mapView.PlannedLegs = _legs;
         _mapView.MapDoubleClicked += (s, e) => OnMapDoubleClicked(e);
@@ -324,7 +327,7 @@ public class MainForm : Form
             _mapView.SetShipPosition(last);
         }
 
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     /// <summary>
@@ -573,7 +576,7 @@ public class MainForm : Form
         }
 
         UpdateStale(now);
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     /// <summary>遊戲多開時，在狀態列說明目前讀哪一個視窗；只開一個時是空字串。</summary>
@@ -710,7 +713,7 @@ public class MainForm : Form
         }
         _mapView.ShowAlternateRoutes = _considerWind;
         UpdateRouteWind();
-        UpdateTitleAndStatus();
+        UpdateStatus();
         if (replan)
         {
             ReplanLegs();
@@ -784,7 +787,7 @@ public class MainForm : Form
             {
                 _mapView.Busy = false;
                 UseWaitCursor = false;
-                UpdateTitleAndStatus();
+                UpdateStatus();
             }
         }
     }
@@ -1083,7 +1086,7 @@ public class MainForm : Form
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     private void UpdateMouseLabel(WorldPoint? p)
@@ -1233,7 +1236,7 @@ public class MainForm : Form
             {
                 _mapView.Busy = false;
                 UseWaitCursor = false;
-                UpdateTitleAndStatus();
+                UpdateStatus();
             }
         }
     }
@@ -1246,7 +1249,7 @@ public class MainForm : Form
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
     }
 
     /// <summary>把規劃航線存成一段「我的最愛」航線，之後在航線管理裡看得到，也會存檔。</summary>
@@ -1287,7 +1290,7 @@ public class MainForm : Form
         _planAlong = null;
         UpdateRouteWind();
         _mapView.Invalidate();
-        UpdateTitleAndStatus();
+        UpdateStatus();
         ShowRouteManager();
         _routeManager!.SelectAndRename(route); // 已經自動取名，直接進入改名，按 Enter 就是接受這個名字
     }
@@ -1403,15 +1406,10 @@ public class MainForm : Form
 
     #region 其他
 
-    private void UpdateTitleAndStatus()
+    private void UpdateStatus()
     {
         string scale = (_mapView.ViewScale * 100).ToString("0.0") + "%";
         WorldPoint? ship = _mapView.ShipPosition;
-
-        // 標題列格式和原版相同：座標 - (比例) - 程式名稱，後面多了版本號
-        Text = ship.HasValue
-            ? $"{ship.Value.X},{ship.Value.Y} - ({scale}) - {AppTitle}"
-            : $"({scale}) - {AppTitle}";
 
         // 還沒讀到座標時，船的位置是上次關閉時存下來的，標明一下
         string lastNote = ship.HasValue && _lastReadTime == 0 ? "（上次位置）" : "";

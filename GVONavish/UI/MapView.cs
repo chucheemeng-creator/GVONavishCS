@@ -159,7 +159,7 @@ public class MapView : Control
     private static readonly Color AlternateColor = Color.FromArgb(215, 150, 255);         // 另一個季節的航線：淡紫
     private static readonly Color MarkerColor = Color.FromArgb(255, 220, 80);             // 座標標籤：黃
 
-    /// <summary>比例或位置改變時觸發（用來更新標題列）。</summary>
+    /// <summary>比例或位置改變時觸發（用來更新狀態列）。</summary>
     public event EventHandler? ViewChanged;
 
     /// <summary>使用者拖曳地圖或雙擊，造成「跟隨船隻」開關改變時觸發。</summary>
