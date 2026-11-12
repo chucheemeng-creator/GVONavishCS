@@ -62,7 +62,7 @@ public sealed class NameMatcher
             List<string> order = [];
             foreach (DiscoveryItem item in items)
             {
-                string baseKey = StripNumber(Normalize(item.Name));
+                string baseKey = StripNumber(Normalize(GameName(item.Name)));
                 if (!byBase.TryGetValue(baseKey, out List<DiscoveryItem>? group))
                 {
                     group = [];
@@ -78,7 +78,7 @@ public sealed class NameMatcher
                 List<DiscoveryItem> group = byBase[baseKey];
                 if (group.Count == 1)
                 {
-                    list.Add((Normalize(group[0].Name), group)); // 不是同名：用完整名稱（保留數字）
+                    list.Add((Normalize(GameName(group[0].Name)), group)); // 不是同名：用完整名稱（保留數字）
                 }
                 else
                 {
@@ -277,13 +277,28 @@ public sealed class NameMatcher
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
     }
 
+    // Excel 和遊戲寫法不同的名稱（不是同名組的結尾數字那種）：
+    // Excel 為了和別的分類區分加了註記，遊戲上沒有（地理類也有一個「關島」，港口類的 Excel 就寫成「關島(港)」）
+    private static readonly Dictionary<string, string> ExcelToGame = new()
+    {
+        ["關島(港)"] = "關島",
+    };
+
     /// <summary>
-    /// 比較「照名稱排序」順序用的名稱：拿掉結尾的數字。
+    /// Excel 上的名稱在遊戲畫面上的寫法（例如 Excel 的「關島(港)」在遊戲上是「關島」）。沒有特別的就是原本的名稱。
+    /// 比對、字數、排序都用遊戲上的寫法；寫入 Excel 時還是用 Excel 的名稱。
+    /// </summary>
+    public static string GameName(string excelName)
+        => ExcelToGame.TryGetValue(excelName.Trim(), out string? game) ? game : excelName;
+
+    /// <summary>
+    /// 比較「照名稱排序」順序用的名稱：遊戲上的寫法，拿掉結尾的數字。
     /// 遊戲上同名的發現物都顯示成「聖母加冠」，Excel 才寫成「聖母加冠1」「聖母加冠2」，
     /// 用拿掉數字的名稱比較，順序才和遊戲一致。
     /// </summary>
     public static string SortKey(string name)
     {
+        name = GameName(name);
         int end = name.Length;
         while (end > 0 && char.IsAsciiDigit(name[end - 1]))
         {
@@ -353,7 +368,7 @@ public sealed class NameMatcher
     public static bool IsContainedIn(string read, string name)
     {
         string r = Normalize(read);
-        string n = StripNumber(Normalize(name));
+        string n = StripNumber(Normalize(GameName(name)));
         return r != "" && r.Length < n.Length && CommonSubsequence(r, n) == r.Length;
     }
 
@@ -377,6 +392,7 @@ public sealed class NameMatcher
         {
             return true;
         }
+        name = GameName(name);
         // 遊戲上同名的一組不顯示結尾的數字（Excel 才有），有沒有數字兩種都算
         return Fits(name) || Fits(SortKey(name));
 

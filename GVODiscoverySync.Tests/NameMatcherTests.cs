@@ -48,6 +48,8 @@ public class NameMatcherTests
     [InlineData("浪子（畫家與莎斯姬亞）", 164, true)]
     [InlineData("埃努瑪·埃里什", 112, true)] // 間隔號是一個中文字寬
     [InlineData("天鵝座β", 59, true)] // β 是全形（實測）
+    [InlineData("關島(港)", 30, true)] // 遊戲上是「關島」，兩個字
+    [InlineData("關島(港)", 62, false)]
     [InlineData("天鵝座β", 46, false)]
     [InlineData("黑鳳蝶", 62, false)] // 3 個字，量到 4 個字寬
     [InlineData("玫瑰鳳蝶", 62, true)]
@@ -95,6 +97,7 @@ public class NameMatcherTests
     [InlineData("聖母加冠1", "聖母加冠")]
     [InlineData("水鹿2", "水鹿")]
     [InlineData("巴別塔（小）", "巴別塔（小）")]
+    [InlineData("關島(港)", "關島")] // 遊戲上的寫法
     public void 排序用的名稱拿掉結尾數字(string name, string key)
         => Assert.Equal(key, NameMatcher.SortKey(name));
 
