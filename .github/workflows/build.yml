@@ -1,9 +1,11 @@
 # 編譯並跑全部的測試（GVONavish.Tests、GVODiscoverySync.Tests）。
-# 推上任何分支、開 Pull Request 到 master 時自動執行；也可以在 Actions 頁面手動執行。
+# Pull Request（到 master）每次更新、合併進 master 時自動執行；也可以在 Actions 頁面手動執行（可以選分支）。
+# （不對所有分支的 push 執行：分支開了 Pull Request 時會同一個 commit 跑兩次）
 name: 編譯和測試
 
 on:
   push:
+    branches: [master]
   pull_request:
     branches: [master]
   workflow_dispatch:
