@@ -178,7 +178,7 @@ public sealed class ItemPickerForm : Form
             {
                 continue;
             }
-            string name = NameMatcher.Normalize(item.Name);
+            string name = NameMatcher.Normalize(NameMatcher.GameName(item.Name));
             double score;
             if (search != "")
             {
@@ -358,7 +358,7 @@ public sealed class ItemPickerForm : Form
         double bestScore = 0.6;
         for (int i = 0; i < items.Count; i++)
         {
-            double s = NameMatcher.Similarity(key, NameMatcher.Normalize(items[i].Name));
+            double s = NameMatcher.Similarity(key, NameMatcher.Normalize(NameMatcher.GameName(items[i].Name)));
             if (s > bestScore)
             {
                 bestScore = s;

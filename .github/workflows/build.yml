@@ -1,0 +1,42 @@
+# 編譯並跑全部的測試（GVONavish.Tests、GVODiscoverySync.Tests）。
+# Pull Request（到 master）每次更新、合併進 master 時自動執行；也可以在 Actions 頁面手動執行（可以選分支）。
+# （不對所有分支的 push 執行：分支開了 Pull Request 時會同一個 commit 跑兩次）
+name: 編譯和測試
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # WinForms、Windows 文字辨識、GDI+（測試用到截圖）都要 Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: 還原套件
+        run: dotnet restore GVONavishCS.slnx
+
+      - name: 編譯
+        run: dotnet build GVONavishCS.slnx -c Release --no-restore
+
+      - name: 測試
+        run: dotnet test GVONavishCS.slnx -c Release --no-build --logger "trx;LogFilePrefix=results" --results-directory TestResults
+
+      # 測試失敗時，把結果檔留下來（Actions 頁面下載，用 Visual Studio 打開看是哪一個）
+      - name: 上傳測試結果
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults

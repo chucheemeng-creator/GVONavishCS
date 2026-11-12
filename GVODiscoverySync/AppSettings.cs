@@ -29,7 +29,7 @@ public class AppSettings
     public double OcrScale { get; set; } = 3;
 
     /// <summary>
-    /// 舊版放在設定檔裡的錯字對照表。現在改放在 GVODiscoverySync.OcrConfusions.json（見 ConfusionTable），
+    /// 舊版放在設定檔裡的錯字對照表。現在改放在 GVODiscoverySync.OcrConfusions.json（見 MappingFile），
     /// 這裡只用來把舊的內容搬過去；搬好後設成 null，存檔時就不會再寫出來。
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

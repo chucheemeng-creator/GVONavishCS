@@ -51,18 +51,30 @@ public sealed class NameMatcher
     // 固定會讀錯的字：讀到的 → 正確的
     private readonly List<(string Wrong, string Right)> _confusions = [];
 
+    private readonly DiscoveryBook _book;
+
     public NameMatcher(DiscoveryBook book, IReadOnlyDictionary<string, string>? confusions = null)
     {
+        _book = book;
         SetConfusions(confusions);
+        RebuildNames();
+    }
 
-        foreach ((string category, List<DiscoveryItem> items) in book.Categories)
+    /// <summary>
+    /// 重新整理比對用的名稱（名稱對照表換了的時候：比對用的是遊戲上的寫法，見 GameName）。
+    /// </summary>
+    public void RebuildNames()
+    {
+        _byCategory.Clear();
+        _categories.Clear();
+        foreach ((string category, List<DiscoveryItem> items) in _book.Categories)
         {
             // 依「拿掉結尾數字的名稱」分組，一組 2 個以上的就是同名
             Dictionary<string, List<DiscoveryItem>> byBase = [];
             List<string> order = [];
             foreach (DiscoveryItem item in items)
             {
-                string baseKey = StripNumber(Normalize(item.Name));
+                string baseKey = StripNumber(Normalize(GameName(item.Name)));
                 if (!byBase.TryGetValue(baseKey, out List<DiscoveryItem>? group))
                 {
                     group = [];
@@ -78,7 +90,7 @@ public sealed class NameMatcher
                 List<DiscoveryItem> group = byBase[baseKey];
                 if (group.Count == 1)
                 {
-                    list.Add((Normalize(group[0].Name), group)); // 不是同名：用完整名稱（保留數字）
+                    list.Add((Normalize(GameName(group[0].Name)), group)); // 不是同名：用完整名稱（保留數字）
                 }
                 else
                 {
@@ -277,13 +289,48 @@ public sealed class NameMatcher
             .Select(e => (IReadOnlyList<DiscoveryItem>)e.Items)];
     }
 
+    // Excel 和遊戲寫法不同的名稱（不是同名組的結尾數字那種）：Excel 為了和別的分類區分加了註記，遊戲上沒有
+    // （地理類也有一個「關島」，港口類的 Excel 就寫成「關島(港)」）。
+    // 內容來自名稱對照表 GVODiscoverySync.NameAliases.json（見 MappingFile），使用者可以自己加。
+    // 整個程式共用一份（排序、字數這些靜態的方法也要用），換的時候整個換掉
+    private static Dictionary<string, string> _excelToGame = Aliases(MappingFile.BuiltInNameAliases);
+
     /// <summary>
-    /// 比較「照名稱排序」順序用的名稱：拿掉結尾的數字。
+    /// 換成新的名稱對照表（Excel 的寫法 → 遊戲上的寫法）。換了以後，已經建立的比對器要呼叫 RebuildNames。
+    /// 對應到自己的（不想用某一組內建的）不列入。
+    /// </summary>
+    public static void SetNameAliases(IReadOnlyDictionary<string, string>? aliases)
+        => _excelToGame = Aliases(aliases ?? new Dictionary<string, string>());
+
+    private static Dictionary<string, string> Aliases(IReadOnlyDictionary<string, string> aliases)
+    {
+        Dictionary<string, string> map = [];
+        foreach ((string excel, string game) in aliases)
+        {
+            string from = excel.Trim(), to = (game ?? "").Trim();
+            if (from != "" && to != "" && from != to)
+            {
+                map[from] = to;
+            }
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Excel 上的名稱在遊戲畫面上的寫法（例如 Excel 的「關島(港)」在遊戲上是「關島」）。沒有特別的就是原本的名稱。
+    /// 比對、字數、排序都用遊戲上的寫法；寫入 Excel 時還是用 Excel 的名稱。
+    /// </summary>
+    public static string GameName(string excelName)
+        => _excelToGame.TryGetValue(excelName.Trim(), out string? game) ? game : excelName;
+
+    /// <summary>
+    /// 比較「照名稱排序」順序用的名稱：遊戲上的寫法，拿掉結尾的數字。
     /// 遊戲上同名的發現物都顯示成「聖母加冠」，Excel 才寫成「聖母加冠1」「聖母加冠2」，
     /// 用拿掉數字的名稱比較，順序才和遊戲一致。
     /// </summary>
     public static string SortKey(string name)
     {
+        name = GameName(name);
         int end = name.Length;
         while (end > 0 && char.IsAsciiDigit(name[end - 1]))
         {
@@ -353,7 +400,7 @@ public sealed class NameMatcher
     public static bool IsContainedIn(string read, string name)
     {
         string r = Normalize(read);
-        string n = StripNumber(Normalize(name));
+        string n = StripNumber(Normalize(GameName(name)));
         return r != "" && r.Length < n.Length && CommonSubsequence(r, n) == r.Length;
     }
 
@@ -377,6 +424,7 @@ public sealed class NameMatcher
         {
             return true;
         }
+        name = GameName(name);
         // 遊戲上同名的一組不顯示結尾的數字（Excel 才有），有沒有數字兩種都算
         return Fits(name) || Fits(SortKey(name));
 
