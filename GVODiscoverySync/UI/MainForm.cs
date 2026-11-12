@@ -34,8 +34,12 @@ public sealed class MainForm : Form
     private readonly AppSettings _settings;
 
     // 錯字對照表（獨立的檔案，程式開著也可以改，改了自動重新讀）
-    private readonly ConfusionTable _confusions;
+    private readonly MappingFile _confusions;
     private readonly string? _confusionProblem;
+
+    // 名稱對照表（Excel 的寫法 → 遊戲上的寫法；獨立的檔案，程式開著也可以改）
+    private readonly MappingFile _nameAliases;
+    private readonly string? _nameAliasProblem;
     private readonly GameWindow _window = new();
     private readonly DiscoveryListReader? _reader;
     private readonly System.Windows.Forms.Timer _timer = new();
@@ -77,7 +81,9 @@ public sealed class MainForm : Form
     public MainForm(AppSettings settings)
     {
         _settings = settings;
-        (_confusions, bool migrated, _confusionProblem) = ConfusionTable.Load(settings.OcrConfusions);
+        (_confusions, bool migrated, _confusionProblem) = MappingFile.LoadConfusions(settings.OcrConfusions);
+        (_nameAliases, _nameAliasProblem) = MappingFile.LoadNameAliases();
+        NameMatcher.SetNameAliases(_nameAliases.Map);
         if (migrated && settings.OcrConfusions is not null)
         {
             // 舊版設定檔裡的錯字對照表已經搬到獨立的檔案：從設定檔拿掉
@@ -253,6 +259,11 @@ public sealed class MainForm : Form
         if (_confusionProblem is not null)
         {
             MessageBox.Show(this, _confusionProblem + "\n\n先只用內建的錯字對照表，改好存檔後會自動重新讀取。",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        if (_nameAliasProblem is not null)
+        {
+            MessageBox.Show(this, _nameAliasProblem + "\n\n先只用內建的名稱對照表，改好存檔後會自動重新讀取。",
                 Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         if (_reader is null)
@@ -562,6 +573,14 @@ public sealed class MainForm : Form
             _matcher.SetConfusions(_confusions.Map);
             _processedMask = null;
             SetStatus(confusionMessage);
+        }
+        // 名稱對照表改過：換成新的、重新整理比對用的名稱，目前這一頁重新讀一次
+        if (_nameAliases.ReloadIfChanged() is string aliasMessage)
+        {
+            NameMatcher.SetNameAliases(_nameAliases.Map);
+            _matcher.RebuildNames();
+            _processedMask = null;
+            SetStatus(aliasMessage);
         }
         byte[] mask = _reader.TextMask(client, scale);
         // 「畫面停了沒、讀過了沒、重試幾次」只給連續讀取用：用截圖檔測試（live＝false）不看也不改，

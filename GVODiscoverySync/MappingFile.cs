@@ -1,10 +1,13 @@
-// ConfusionTable.cs
-// 錯字對照表，存在程式同一個資料夾的 GVODiscoverySync.OcrConfusions.json。
+// MappingFile.cs
+// 使用者可以自己改的對照表（JSON，放在程式同一個資料夾）：
+//   - 錯字對照表 GVODiscoverySync.OcrConfusions.json：文字辨識固定會讀錯的字，讀到的 → 正確的
+//   - 名稱對照表 GVODiscoverySync.NameAliases.json：Excel 和遊戲寫法不同的名稱，Excel 的寫法 → 遊戲上的寫法
 //
 // 和設定檔（GVODiscoverySync.json）分開：設定檔在關閉程式時會整個重寫（視窗位置等），
-// 錯字對照表卻常常是程式開著、看到讀錯的字時順手修改，放在一起的話，改好的內容會在關閉程式時被蓋掉。
-// 這個檔案程式只在第一次（檔案還不存在）時建立，之後只讀不寫；
+// 對照表卻常常是程式開著、看到讀錯的字時順手修改，放在一起的話，改好的內容會在關閉程式時被蓋掉。
+// 檔案程式只在第一次（檔案還不存在）時建立，之後只讀不寫；
 // 執行中修改、存檔後，下一次讀取畫面時就會自動換成新的對照表。
+// 內建的對照沒寫在檔案裡也會使用，所以更新程式後新加的內建對照不用手動加。
 
 using System;
 using System.Collections.Generic;
@@ -17,13 +20,13 @@ using GVO.Common.IO;
 
 namespace GVODiscoverySync;
 
-public sealed class ConfusionTable
+public sealed class MappingFile
 {
     /// <summary>
-    /// 內建的錯字對照表。檔案裡沒寫的也會使用，所以更新程式後新加的內建錯字不用手動加；
+    /// 內建的錯字對照表（讀到的 → 正確的）。檔案裡沒寫的也會使用；
     /// 不想用某一組內建的，在檔案裡把它改成對應到自己（例如 "專": "專"）。
     /// </summary>
-    public static readonly Dictionary<string, string> BuiltIn = new()
+    public static readonly Dictionary<string, string> BuiltInConfusions = new()
     {
         ["巑"] = "鑽", // 黃鑽、粉鑽、藍鑽、科依諾爾鑽
         ["專"] = "轉", // 汽轉球 → 專球（漏了偏旁）
@@ -56,7 +59,48 @@ public sealed class ConfusionTable
         ["橵"] = "撒", // 撒哈拉沙漠、凱撒大帝的寶劍等
     };
 
-    public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.OcrConfusions.json");
+    /// <summary>
+    /// 內建的名稱對照表（Excel 的寫法 → 遊戲上的寫法）：Excel 為了和別的分類區分加了註記、遊戲上沒有的。
+    /// </summary>
+    public static readonly Dictionary<string, string> BuiltInNameAliases = new()
+    {
+        ["關島(港)"] = "關島", // 地理類也有「關島」，港口類的 Excel 寫成「關島(港)」，遊戲上都是「關島」
+    };
+
+    private static readonly string[] ConfusionsHeader =
+    [
+        "文字辨識固定會讀錯的字：左邊是讀到的，右邊是正確的。",
+        "比對時照原樣、換字後各比一次，取比較像的，所以原本就有這個字的名稱不受影響。",
+        "程式開著也可以改，存檔後下一次讀取畫面時就會用新的對照表。",
+        "程式內建的錯字（巑→鑽 等）沒寫在這裡也會使用；不想用某一組內建的，把它改成對應到自己（例如 \"專\": \"專\"）。",
+        "可以寫 // 註解，最後一行後面多一個逗號也沒關係。",
+    ];
+
+    private static readonly string[] NameAliasesHeader =
+    [
+        "Excel 和遊戲寫法不同的名稱：左邊是 Excel 上的寫法，右邊是遊戲畫面上的寫法。",
+        "Excel 為了和別的分類區分加了註記、遊戲上沒有時用（例如地理類也有「關島」，港口類的 Excel 寫成「關島(港)」）。",
+        "左邊要和 Excel 一字不差（括號的全形、半形也要一樣），寫錯不會有提示，只是沒有作用。",
+        "程式開著也可以改，存檔後下一次讀取畫面時就會套用。",
+        "程式內建的（關島(港) 等）沒寫在這裡也會使用；不想用某一組內建的，把它改成對應到自己。",
+        "可以寫 // 註解，最後一行後面多一個逗號也沒關係。",
+    ];
+
+    /// <summary>這個對照表的檔案（完整路徑）。</summary>
+    public string FilePath { get; }
+
+    private readonly IReadOnlyDictionary<string, string> _builtIn;
+    private readonly string _title; // 訊息用的名稱：錯字對照表、名稱對照表
+    private readonly string[] _header;
+
+    private MappingFile(string fileName, IReadOnlyDictionary<string, string> builtIn, string title, string[] header)
+    {
+        FilePath = Path.Combine(AppContext.BaseDirectory, fileName);
+        _builtIn = builtIn;
+        _title = title;
+        _header = header;
+        Map = new(builtIn);
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -65,23 +109,34 @@ public sealed class ConfusionTable
         AllowTrailingCommas = true,
     };
 
-    /// <summary>目前使用的對照表（檔案的內容加上檔案裡沒寫的內建錯字）：讀到的 → 正確的。</summary>
-    public Dictionary<string, string> Map { get; private set; } = new(BuiltIn);
+    /// <summary>目前使用的對照表（檔案的內容加上檔案裡沒寫的內建對照）。</summary>
+    public Dictionary<string, string> Map { get; private set; }
 
     // 上一次讀檔時檔案的修改時間（檔案不存在時是 DateTime.MinValue）
     private DateTime _lastWrite = DateTime.MinValue;
 
     /// <summary>
-    /// 讀取對照表。檔案還不存在時建立一份：內容是內建的錯字，加上舊版設定檔裡的（oldSettings，搬過來）。
+    /// 讀取錯字對照表。檔案還不存在時建立一份：內容是內建的錯字，加上舊版設定檔裡的（oldSettings，搬過來）。
     /// 回傳的 Migrated 表示舊設定檔的內容已經安全寫進新檔案，可以從設定檔拿掉了。
     /// </summary>
-    public static (ConfusionTable Table, bool Migrated, string? Problem) Load(IReadOnlyDictionary<string, string>? oldSettings)
+    public static (MappingFile Table, bool Migrated, string? Problem) LoadConfusions(IReadOnlyDictionary<string, string>? oldSettings)
+        => new MappingFile("GVODiscoverySync.OcrConfusions.json", BuiltInConfusions, "錯字對照表", ConfusionsHeader).Load(oldSettings);
+
+    /// <summary>讀取名稱對照表（Excel 的寫法 → 遊戲上的寫法）。檔案還不存在時建立一份，內容是內建的。</summary>
+    public static (MappingFile Table, string? Problem) LoadNameAliases()
     {
-        ConfusionTable table = new();
+        (MappingFile table, _, string? problem) =
+            new MappingFile("GVODiscoverySync.NameAliases.json", BuiltInNameAliases, "名稱對照表", NameAliasesHeader).Load(null);
+        return (table, problem);
+    }
+
+    private (MappingFile Table, bool Migrated, string? Problem) Load(IReadOnlyDictionary<string, string>? oldSettings)
+    {
+        MappingFile table = this;
         bool migrated = false;
         if (!File.Exists(FilePath))
         {
-            Dictionary<string, string> initial = new(BuiltIn);
+            Dictionary<string, string> initial = new(_builtIn);
             foreach ((string wrong, string right) in oldSettings ?? new Dictionary<string, string>())
             {
                 initial[wrong] = right; // 自己加的、改過的優先
@@ -125,7 +180,7 @@ public sealed class ConfusionTable
         {
             return null;
         }
-        return Reload() ?? $"錯字對照表已更新（{Map.Count} 組），這一頁重新比對。";
+        return Reload() ?? $"{_title}已更新（{Map.Count} 組），這一頁重新比對。";
     }
 
     // 讀檔，成功回傳 null，失敗回傳說明（Map 不變）
@@ -136,15 +191,15 @@ public sealed class ConfusionTable
             if (!File.Exists(FilePath))
             {
                 _lastWrite = DateTime.MinValue;
-                Map = new(BuiltIn);
+                Map = new(_builtIn);
                 return null;
             }
             DateTime write = File.GetLastWriteTimeUtc(FilePath);
             string text = File.ReadAllText(FilePath);
             Dictionary<string, string> map = JsonSerializer.Deserialize<Dictionary<string, string>>(text, JsonOptions) ?? [];
-            foreach ((string wrong, string right) in BuiltIn)
+            foreach ((string from, string to) in _builtIn)
             {
-                map.TryAdd(wrong, right);
+                map.TryAdd(from, to);
             }
             Map = map;
             _lastWrite = write;
@@ -162,27 +217,26 @@ public sealed class ConfusionTable
                 // 讀不到修改時間：下次再試
             }
             return ex is JsonException
-                ? $"錯字對照表 {Path.GetFileName(FilePath)} 格式有錯，先繼續用原本的對照表：{ex.Message}"
-                : $"錯字對照表 {Path.GetFileName(FilePath)} 讀不出來（可能正在存檔），先繼續用原本的對照表。";
+                ? $"{_title} {Path.GetFileName(FilePath)} 格式有錯，先繼續用原本的對照表：{ex.Message}"
+                : $"{_title} {Path.GetFileName(FilePath)} 讀不出來（可能正在存檔），先繼續用原本的對照表。";
         }
     }
 
     // 第一次建立的檔案內容：前面是說明（// 註解），每一組一行
-    private static string Template(Dictionary<string, string> map)
+    private string Template(Dictionary<string, string> map)
     {
         StringBuilder sb = new();
-        sb.AppendLine("// 文字辨識固定會讀錯的字：左邊是讀到的，右邊是正確的。");
-        sb.AppendLine("// 比對時照原樣、換字後各比一次，取比較像的，所以原本就有這個字的名稱不受影響。");
-        sb.AppendLine("// 程式開著也可以改，存檔後下一次讀取畫面時就會用新的對照表。");
-        sb.AppendLine("// 程式內建的錯字（巑→鑽 等）沒寫在這裡也會使用；不想用某一組內建的，把它改成對應到自己（例如 \"專\": \"專\"）。");
-        sb.AppendLine("// 可以寫 // 註解，最後一行後面多一個逗號也沒關係。");
+        foreach (string line in _header)
+        {
+            sb.Append("// ").AppendLine(line);
+        }
         sb.AppendLine("{");
-        foreach ((string wrong, string right) in map)
+        foreach ((string from, string to) in map)
         {
             sb.Append("  ")
-              .Append(JsonSerializer.Serialize(wrong, JsonOptions))
+              .Append(JsonSerializer.Serialize(from, JsonOptions))
               .Append(": ")
-              .Append(JsonSerializer.Serialize(right, JsonOptions))
+              .Append(JsonSerializer.Serialize(to, JsonOptions))
               .AppendLine(",");
         }
         sb.AppendLine("}");

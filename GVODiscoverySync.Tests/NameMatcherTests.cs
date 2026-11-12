@@ -140,6 +140,14 @@ public class NameMatcherTests
     }
 
     [Fact]
+    public void 名稱對照表內建關島()
+    {
+        Assert.Equal("關島", MappingFile.BuiltInNameAliases["關島(港)"]);
+        Assert.Equal("關島", NameMatcher.GameName("關島(港)"));
+        Assert.Equal("海埔姜", NameMatcher.GameName("海埔姜")); // 沒有特別的：原本的名稱
+    }
+
+    [Fact]
     public void 錯字對照表可以換()
     {
         NameMatcher matcher = new(TestBook.Book); // 沒有錯字對照表

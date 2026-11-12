@@ -14,7 +14,7 @@ namespace GVODiscoverySync.Tests;
 internal static class TestBook
 {
     private static readonly Lazy<DiscoveryBook> LazyBook = new(Load);
-    private static readonly Lazy<NameMatcher> LazyMatcher = new(() => new NameMatcher(Book, ConfusionTable.BuiltIn));
+    private static readonly Lazy<NameMatcher> LazyMatcher = new(() => new NameMatcher(Book, MappingFile.BuiltInConfusions));
 
     public static DiscoveryBook Book => LazyBook.Value;
 
