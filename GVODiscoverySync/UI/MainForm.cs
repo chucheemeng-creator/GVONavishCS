@@ -657,8 +657,12 @@ public sealed class MainForm : Form
                 SortMode.ByName => "依名稱排列",
                 _ => "排序看不出來",
             };
+            // 放大顯示時提醒一下比對字形的限制（詳見 README「筆電、放大顯示的電腦」）
+            string scaleNote = Math.Abs(scale - 1) <= 0.001 ? ""
+                : scale >= 1.45 ? $"〔顯示縮放 {scale:0%}：字形只認不學〕"
+                : $"〔顯示縮放 {scale:0%}：不比對字形〕";
             SetStatus($"{category}{how}（{sortText}）：這一頁讀到 {snapshot.Rows.Count} 筆，新出現 {page.Added} 筆。" +
-                      $"這個分類目前對到 {page.Listed}／{page.Total} 個。");
+                      $"這個分類目前對到 {page.Listed}／{page.Total} 個。{scaleNote}");
             UpdateSummary();
             _glyphs.SaveIfDirty(); // 這一頁學到新的字形就存起來
         }
