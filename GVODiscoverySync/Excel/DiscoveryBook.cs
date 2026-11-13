@@ -54,6 +54,13 @@ public sealed class DiscoveryBook
     public int ItemCount => Categories.Values.Sum(l => l.Count);
 
     /// <summary>
+    /// 這個工作表是彙整頁、不是發現物的分類：「All」頁（GVOexcel-AllSheet 產生的，把各分類彙整在一起）。
+    /// 它也有 þ、2～5 這幾欄，但內容是公式（從各分類查過來的），不能拿來比對，更不能寫入。
+    /// </summary>
+    public static bool IsSummarySheet(string sheetName)
+        => sheetName.Trim().Equals("All", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// 不經過 Excel，直接用發現物建立（給測試專案用：測試資料是匯出的名稱清單，不用每次打開 Excel）。
     /// 分類的順序、分類裡的順序和 items 一樣。這樣建立的不能寫入（沒有檔案）。
     /// </summary>
@@ -103,6 +110,10 @@ public sealed class DiscoveryBook
             if (category.StartsWith("首頁", StringComparison.Ordinal))
             {
                 book.ReadCharacterNames(data, strings);
+                continue;
+            }
+            if (IsSummarySheet(category))
+            {
                 continue;
             }
             book.ReadSheet(category, data, strings);
