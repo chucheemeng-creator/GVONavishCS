@@ -132,11 +132,69 @@ public class GlyphTests
     }
 
     [Fact]
-    public void 放大顯示時不比對字形()
+    public void 讀不到字形的情況()
     {
         using Bitmap client = Screen("astronomy-all-cards.png");
-        Assert.Null(DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 0, 1.5, 158));
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("no-such-file.json"));
         Assert.Null(DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 0, 1, 0)); // 量不到字寬
+        Assert.Null(DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 0, 1.5, 158)); // 放大顯示、沒有已知的字形可以對
+        Assert.Null(DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 0, 1.25, 158, store.Snap)); // 125%：筆畫太糊，不讀
+    }
+
+    // 實際的 150% 截圖（筆電，1200×900）上每一列的名稱
+    private static readonly string[] Birds150 =
+        ["鳳凰雀", "金剛鸚鵡", "藍紫金剛鸚鵡", "海鸚鵡", "王霸鶲", "金鵰", "夜鷺", "華美極樂鳥", "雪鴞", "針尾維達鳥"];
+
+    private static ListRow Row150(Bitmap client, GlyphStore store, int row, string name, string text)
+        => new(row, text, false, text == "" ? Array.Empty<string>() : [text], TestBook.GameWidth(name),
+            DiscoveryListReader.ReadGlyphs(client, new ListLayout(), row, 1.5, TestBook.GameWidth(name), store.Snap), GlyphsExact: false);
+
+    [Fact]
+    public void 放大顯示150_每個字都認得出來()
+    {
+        // 畫面被 Windows 放大 1.5 倍、筆畫是糊的：在每個遊戲像素的中心取樣，再換成最像的已知字形
+        using Bitmap client = Screen("birds-150.png");
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("no-such-file.json")); // 只用內建的字形
+        for (int row = 0; row < Birds150.Length; row++)
+        {
+            IReadOnlyList<Glyph>? cells = DiscoveryListReader.ReadGlyphs(client, new ListLayout(), row, 1.5, TestBook.GameWidth(Birds150[row]), store.Snap);
+            Assert.Equal(Birds150[row], store.Read(cells));
+        }
+        Assert.False(store.Dirty);
+    }
+
+    [Fact]
+    public void 放大顯示150_認出讀不出來和讀錯的列()
+    {
+        // 文字辨識實際讀到的：金剛鸚鵡→「金剛鵡」、海鸚鵡→「海鵡」、金鵰和雪鴞讀不出來、夜鷺→「夜」
+        using Bitmap client = Screen("birds-150.png");
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("no-such-file.json"));
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        string[] read = ["鳳凰雀", "金剛鵡", "藍紫金剛鵡", "海鵡", "王霸鶲", "", "夜", "華美極樂鳥", "", "針尾維達鳥"];
+        session.AddPage("鳥類", [.. Birds150.Select((n, i) => Row150(client, store, i, n, read[i]))]);
+
+        Assert.Empty(session.Unmatched);
+        foreach (string name in new[] { "金剛鸚鵡", "藍紫金剛鸚鵡", "海鸚鵡", "金鵰", "夜鷺", "雪鴞" })
+        {
+            Found f = session.Matched.Values.Single(x => x.Item?.Name == name);
+            Assert.True(f.ByGlyph, name);
+            Assert.False(f.NeedsConfirm, name);
+        }
+        Assert.Equal(1806, store.Count); // 放大顯示時不學
+        Assert.False(store.Dirty);
+    }
+
+    [Fact]
+    public void 放大顯示時認不出來的格子不當成矛盾()
+    {
+        using Bitmap client = Screen("birds-150.png");
+        GlyphStore store = new();
+        store.Learn("金", [GlyphStore.Load(TestBook.DataPath("no-such-file.json")).Snap(
+            DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 5, 1.5, 30, g => g)![0])]);
+        IReadOnlyList<Glyph> cells = DiscoveryListReader.ReadGlyphs(client, new ListLayout(), 5, 1.5, 30, store.Snap)!; // 金鵰
+        Assert.Equal("金？", store.Read(cells));
+        Assert.Equal(GlyphVerdict.Partial, store.Check("金鵰", cells)); // 「鵰」那一格認不出來：不算矛盾，也不算全對
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("雪鴞", cells));
     }
 
     [Fact]

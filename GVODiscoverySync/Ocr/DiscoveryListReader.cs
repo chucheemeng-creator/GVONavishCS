@@ -31,10 +31,12 @@ namespace GVODiscoverySync.Ocr;
 /// 這一列有字、但怎麼讀都讀不出來時（常見於一、兩個字的短名稱，例如「蠶」），Readings 是空的、Text 是 ""。
 /// TextWidth 是這一列的字從畫面上量到的寬度（遊戲原本的像素，0 表示沒量到）。
 /// 清單的字型每個中文字一樣寬，所以就算辨識漏了字，也看得出名稱原本有幾個字。
-/// Glyphs 是這一列每一格（一個中文字寬）的字形，用來比對字形（見 Glyph）；沒有放大顯示（縮放 1）時才有，否則是 null。
+/// Glyphs 是這一列每一格（一個中文字寬）的字形，用來比對字形（見 Glyph）；讀不到時是 null。
+/// GlyphsExact：字形是不是逐點精確的。沒有放大顯示（縮放 1）時是；放大顯示（150% 等）時畫面是糊的，
+/// 每一格是「最像的已知字形」，不是百分之百可靠，只用來認出整列，不用來排除別的名稱、也不學。
 /// </summary>
 public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings, double TextWidth,
-    IReadOnlyList<Glyph>? Glyphs = null);
+    IReadOnlyList<Glyph>? Glyphs = null, bool GlyphsExact = true);
 
 /// <summary>一次辨識的結果。</summary>
 public sealed class ListSnapshot
@@ -306,7 +308,7 @@ public sealed class DiscoveryListReader
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
             rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, Layout.RowHeight, scale), texts, Width(row),
-                ReadGlyphs(client, Layout, row, scale, Width(row))));
+                ReadGlyphs(client, Layout, row, scale, Width(row), SnapGlyph), Math.Abs(scale - 1) <= 0.001));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -486,15 +488,29 @@ public sealed class DiscoveryListReader
     // 字的筆畫的亮度：字是純色（最亮的色版是 255）、沒有平滑處理；選取的那一列底色大約 160，比這個暗
     private const int GlyphThreshold = 240;
 
+    // 放大顯示時筆畫的亮度：畫面是糊的，筆畫的邊緣變灰。用實際的 150% 截圖試過，200～215 都能全部認對
+    private const int ScaledGlyphThreshold = 205;
+
     /// <summary>
-    /// 清單第 row 列每一格（一個中文字寬）的字形。textWidth 是這一列量到的字寬（決定有幾格）。
-    /// 遊戲畫面被 Windows 放大（縮放不是 1）時點會糊掉、不能直接比對，回傳 null；量不到字寬時也是 null。
+    /// 放大顯示時，把取樣到的字形換成最像的已知字形（GlyphStore.Snap）；沒設定的話，放大顯示時不讀字形。
     /// </summary>
-    public static IReadOnlyList<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth)
+    public Func<Glyph, Glyph>? SnapGlyph { get; set; }
+
+    /// <summary>
+    /// 清單第 row 列每一格（一個中文字寬）的字形。textWidth 是這一列量到的字寬（決定有幾格）。量不到字寬時回傳 null。
+    /// 遊戲畫面被 Windows 放大（150% 以上）時：在每個遊戲像素的中心取樣，再用 snap 換成最像的已知字形
+    /// （沒有 snap、或放大倍率太小（125%：一個點寬的筆畫會糊到取樣不到）時回傳 null）。
+    /// </summary>
+    public static IReadOnlyList<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
+        Func<Glyph, Glyph>? snap = null)
     {
-        if (Math.Abs(scale - 1) > 0.001 || textWidth <= 0)
+        if (textWidth <= 0)
         {
             return null;
+        }
+        if (Math.Abs(scale - 1) > 0.001)
+        {
+            return snap is null || scale < 1.45 ? null : ReadScaledGlyphs(client, layout, row, scale, textWidth, snap);
         }
         int count = (int)Math.Round((textWidth + 2) / Glyph.Width);
         Rectangle list = ToScreen(layout.ListX, layout.ListY, layout.ListWidth, layout.ListHeight, client.Size, scale);
@@ -522,6 +538,68 @@ public sealed class DiscoveryListReader
             glyphs.Add(new Glyph(rows));
         }
         return glyphs;
+    }
+
+    // 放大顯示時讀字形：遊戲的每個像素被放大成 scale 個螢幕像素，在它的中心取樣（中心那一點最不受旁邊的像素影響）。
+    // 遊戲畫面對到螢幕像素的位置可能差一個像素（視窗位置、邊框寬度不同），所以差一個像素的幾種位置都試，
+    // 用認得出最多格的那一種
+    private static IReadOnlyList<Glyph>? ReadScaledGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
+        Func<Glyph, Glyph> snap)
+    {
+        int count = (int)Math.Round((textWidth + 2) / Glyph.Width);
+        if (count < 1 || GlyphOriginX + count * Glyph.Width > layout.ListWidth)
+        {
+            return null;
+        }
+        // 這一列第一格的左上角（遊戲像素，從遊戲畫面的左上角算起）
+        double gameX = client.Width / scale / 2 + layout.ListX + GlyphOriginX;
+        double gameY = client.Height / scale / 2 + layout.ListY + row * layout.RowHeight;
+        Rectangle all = new(Point.Empty, client.Size);
+        Rectangle r = Rectangle.Intersect(all, Rectangle.FromLTRB(
+            (int)Math.Floor(gameX * scale) - 2, (int)Math.Floor(gameY * scale) - 2,
+            (int)Math.Ceiling((gameX + count * Glyph.Width) * scale) + 2, (int)Math.Ceiling((gameY + layout.RowHeight) * scale) + 2));
+        if (r.Width <= 0 || r.Height <= 0)
+        {
+            return null;
+        }
+        byte[] bytes = GetPixelBytes(client, r, out int stride);
+
+        List<Glyph>? best = null;
+        int bestKnown = -1;
+        (int Dx, int Dy)[] shifts = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
+        foreach ((int dx, int dy) in shifts)
+        {
+            List<Glyph> glyphs = [];
+            for (int i = 0; i < count; i++)
+            {
+                ushort[] rows = new ushort[layout.RowHeight];
+                for (int y = 0; y < rows.Length; y++)
+                {
+                    int sy = Math.Clamp((int)Math.Floor((gameY + y + 0.5) * scale) + dy - r.Y, 0, r.Height - 1);
+                    int bits = 0;
+                    for (int x = 0; x < Glyph.Width; x++)
+                    {
+                        int sx = Math.Clamp((int)Math.Floor((gameX + i * Glyph.Width + x + 0.5) * scale) + dx - r.X, 0, r.Width - 1);
+                        int o = sy * stride + sx * 4;
+                        bool ink = Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2])) >= ScaledGlyphThreshold;
+                        bits = (bits << 1) | (ink ? 1 : 0);
+                    }
+                    rows[y] = (ushort)bits;
+                }
+                glyphs.Add(snap(new Glyph(rows)));
+            }
+            int known = glyphs.Count(g => !ReferenceEquals(g, Glyph.Unreadable));
+            if (known > bestKnown)
+            {
+                best = glyphs;
+                bestKnown = known;
+            }
+            if (known == count)
+            {
+                break; // 每一格都認得：就是這個位置
+            }
+        }
+        return best;
     }
 
     /// <summary>

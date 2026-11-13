@@ -101,6 +101,10 @@ public sealed class MainForm : Form
         _reader = DiscoveryListReader.TryCreate(settings.Layout);
         if (_reader is not null)
         {
+            _reader.SnapGlyph = _glyphs.Snap; // 放大顯示時，把糊掉的字形換成最像的已知字形
+        }
+        if (_reader is not null)
+        {
             _reader.OcrScale = settings.OcrScale;
         }
         BuildUi();
@@ -1028,7 +1032,7 @@ public sealed class MainForm : Form
                     $"縮放 {scale}、辨識放大 {_reader.OcrScale} 倍、語言 {_reader.LanguageName}",
                     $"標題：「{snapshot.TitleText}」（{snapshot.TitleScale} 倍）→ 分類：{_matcher?.MatchCategory(snapshot.TitleText) ?? "（對不到）"}",
                     $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]) ?? "（推測不出來）"}",
-                    $"認得的字形：{_glyphs.Count} 個{(snapshot.Rows.Any(r => r.Glyphs is not null) ? "" : "（這張畫面不能比對字形：有放大顯示，或量不到字寬）")}",
+                    $"認得的字形：{_glyphs.Count} 個{(snapshot.Rows.Any(r => r.Glyphs is not null) ? "" : "（這張畫面不能比對字形：放大倍率不到 150%，或量不到字寬）")}",
                 ];
                 // 每一列：辨識讀到的原文 → 比對結果（套用錯字對照表、同一頁推斷之後，和實際讀取時一樣）
                 string? category = _matcher?.MatchCategory(snapshot.TitleText)

@@ -128,7 +128,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         {
             foreach ((ListRow row, _, MatchResult match) in picks)
             {
-                if (match.IsMatch && match.Score >= 1)
+                if (match.IsMatch && match.Score >= 1 && row.GlyphsExact)
                 {
                     glyphs.Learn(match.Item!.Name, row.Glyphs);
                 }
@@ -143,6 +143,24 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             (ListRow row, string text, MatchResult match) = picks[i];
             if (row.Glyphs is null || (match.IsMatch && match.Score >= 1))
             {
+                continue;
+            }
+            if (!row.GlyphsExact)
+            {
+                // 放大顯示：字形是「最像的已知字形」，不是逐點精確的。只在整列每個字都對得上、而且只有一個名稱這樣時採用，
+                // 不用來排除別的名稱、不推斷、不學
+                List<IReadOnlyList<DiscoveryItem>> full = [.. matcher.Between(category, null, null)
+                    .Where(g => glyphs.Check(g[0].Name, row.Glyphs) == GlyphVerdict.Full)];
+                if (full.Count == 1)
+                {
+                    string display = NameMatcher.SortKey(full[0][0].Name);
+                    MatchResult result = matcher.Match(category, display, row.TextWidth);
+                    if (result.IsMatch && result.Score >= 1)
+                    {
+                        picks[i] = (row, display, result);
+                        _glyphMatches.Add(result);
+                    }
+                }
                 continue;
             }
             // 字數對得上、字形不矛盾的名稱（有括號、英數字的名稱不能比對字形，只要字數可能對得上就算一個）
@@ -198,7 +216,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
 
     // 這一列的字形和這個名稱（同名的一組）對不上：認得的字裡有不一樣的
     private bool GlyphMismatch(IReadOnlyList<DiscoveryItem> group, ListRow row)
-        => glyphs is not null && glyphs.Check(group[0].Name, row.Glyphs) == GlyphVerdict.Mismatch;
+        => glyphs is not null && row.GlyphsExact && glyphs.Check(group[0].Name, row.Glyphs) == GlyphVerdict.Mismatch;
 
     /// <summary>
     /// 讀到的一頁：每一列挑最像的讀法、判斷排序、同一頁推斷，然後加進結果（新的一筆用 Added 通知畫面）。

@@ -22,6 +22,12 @@ public sealed class Glyph
         _rows = rows;
     }
 
+    /// <summary>
+    /// 認不出來的一格：遊戲畫面被 Windows 放大顯示時，字形是從糊掉的畫面取樣、再找最像的已知字形（見 GlyphStore.Snap）；
+    /// 找不到夠像的就用這個代表「這一格不知道是什麼字」，比對時跳過、不學。
+    /// </summary>
+    public static readonly Glyph Unreadable = new([]);
+
     /// <summary>一格裡完全沒有筆畫。</summary>
     public bool IsEmpty => Array.TrueForAll(_rows, r => r == 0);
 

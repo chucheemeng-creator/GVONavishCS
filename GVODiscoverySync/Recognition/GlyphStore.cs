@@ -142,6 +142,10 @@ public sealed class GlyphStore
         int known = 0;
         for (int i = 0; i < display.Length; i++)
         {
+            if (ReferenceEquals(cells![i], Glyph.Unreadable))
+            {
+                continue; // 這一格認不出來（放大顯示時）：不算對得上，也不算矛盾
+            }
             if (_glyphs.TryGetValue(display[i], out Glyph? glyph))
             {
                 if (!glyph.Matches(cells![i]))
@@ -158,6 +162,39 @@ public sealed class GlyphStore
         return known == display.Length ? GlyphVerdict.Full
             : known > 0 ? GlyphVerdict.Partial
             : GlyphVerdict.Unknown;
+    }
+
+    /// <summary>
+    /// 放大顯示時用：raw 是從糊掉的畫面取樣到的字形，換成最像的已知字形。
+    /// 要夠像（差 28 個點以內），而且明顯比第二像的字更像（至少多 5 個點）才算；否則回傳 Glyph.Unreadable。
+    /// 用實際的 150% 截圖量過（172 個字）：正確的字最多差 23 個點，和第二像的至少差 7 個點。
+    /// 不認得的字有可能被當成長得像的另一個字（例如沒學過「白」時當成「占」），所以放大顯示時的字形只用來認出整列。
+    /// </summary>
+    public Glyph Snap(Glyph raw)
+    {
+        Glyph? best = null;
+        int bestDistance = int.MaxValue, second = int.MaxValue;
+        string bestKey = "";
+        foreach (Glyph glyph in _glyphs.Values)
+        {
+            int distance = glyph.Distance(raw);
+            if (distance < bestDistance)
+            {
+                string key = glyph.ToString();
+                if (key != bestKey)
+                {
+                    second = bestDistance; // 原本最像的變成第二像（同一個字形的「·」「‧」不算）
+                }
+                best = glyph;
+                bestDistance = distance;
+                bestKey = key;
+            }
+            else if (distance < second && glyph.ToString() != bestKey)
+            {
+                second = distance;
+            }
+        }
+        return best is not null && bestDistance <= 28 && second - bestDistance >= 5 ? best : Glyph.Unreadable;
     }
 
     /// <summary>這一列每一格認出來的字（不認得的是「？」），除錯輸出用。</summary>
