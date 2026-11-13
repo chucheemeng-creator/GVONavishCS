@@ -540,6 +540,12 @@ public sealed class DiscoveryListReader
         return glyphs;
     }
 
+    private static readonly (int Dx, int Dy)[] ScaledShifts =
+        [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
+
+    // 上一次每一格都認得的位置
+    private static (int Dx, int Dy) _lastShift = (0, 0);
+
     // 放大顯示時讀字形：遊戲的每個像素被放大成 scale 個螢幕像素，在它的中心取樣（中心那一點最不受旁邊的像素影響）。
     // 遊戲畫面對到螢幕像素的位置可能差一個像素（視窗位置、邊框寬度不同），所以差一個像素的幾種位置都試，
     // 用認得出最多格的那一種
@@ -566,8 +572,8 @@ public sealed class DiscoveryListReader
 
         List<Glyph>? best = null;
         int bestKnown = -1;
-        (int Dx, int Dy)[] shifts = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
-        foreach ((int dx, int dy) in shifts)
+        // 上一次每一格都認得的位置先試（同一個視窗的位置不會變，通常第一次就中）
+        foreach ((int dx, int dy) in ScaledShifts.OrderBy(s => s == _lastShift ? 0 : 1))
         {
             List<Glyph> glyphs = [];
             for (int i = 0; i < count; i++)
@@ -596,6 +602,7 @@ public sealed class DiscoveryListReader
             }
             if (known == count)
             {
+                _lastShift = (dx, dy);
                 break; // 每一格都認得：就是這個位置
             }
         }

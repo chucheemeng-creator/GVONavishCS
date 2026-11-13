@@ -111,6 +111,28 @@ public class GlyphTests
     }
 
     [Fact]
+    public void 認得的字只看到一次不一樣的字形不會被換掉()
+    {
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        IReadOnlyList<Glyph> orion = Cells(client, 5, "獵戶座"), crow = Cells(client, 6, "烏鴉座");
+        GlyphStore store = new();
+        store.Learn("獵戶座", orion);
+
+        // 假設有一次讀錯位置：「座」那一格看到別的字形。只看到一次：不換
+        store.Learn("座", [crow[0]]);
+        Assert.Equal(GlyphVerdict.Full, store.Check("獵戶座", orion));
+
+        // 中間又看到原本的字形：之前那一次不算數，再來一次不一樣的也還是不換
+        store.Learn("座", [orion[2]]);
+        store.Learn("座", [crow[0]]);
+        Assert.Equal(GlyphVerdict.Full, store.Check("獵戶座", orion));
+
+        // 連續兩次都是同一個新的字形：換
+        store.Learn("座", [crow[0]]);
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("獵戶座", orion));
+    }
+
+    [Fact]
     public void 字形比對的結果()
     {
         using Bitmap client = Screen("astronomy-all-cards.png");

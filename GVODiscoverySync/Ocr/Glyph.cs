@@ -52,8 +52,12 @@ public sealed class Glyph
     /// </summary>
     public bool Matches(Glyph other) => Distance(other) <= 1;
 
-    /// <summary>存檔用的文字（每一橫排 4 個十六進位數字）。</summary>
-    public override string ToString() => string.Concat(Array.ConvertAll(_rows, r => r.ToString("x4", CultureInfo.InvariantCulture)));
+    // ToString 的結果（比對時當索引鍵用，一頁要用上幾千次，算一次就記下來）
+    private string? _text;
+
+    /// <summary>存檔、當索引鍵用的文字（每一橫排 4 個十六進位數字）。</summary>
+    public override string ToString()
+        => _text ??= string.Concat(Array.ConvertAll(_rows, r => r.ToString("x4", CultureInfo.InvariantCulture)));
 
     /// <summary>從存檔用的文字讀回來；格式不對時回傳 null。</summary>
     public static Glyph? Parse(string? text)

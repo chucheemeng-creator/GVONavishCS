@@ -50,6 +50,10 @@ public sealed class GlyphStore
     // 反過來查：這個字形是哪個字（「·」「‧」「・」在遊戲上是同一個字形，所以可能不只一個）
     private readonly Dictionary<string, HashSet<char>> _chars = [];
 
+    // 已經認得的字，這次看到的字形不一樣：先記著，下次看到的也是這個新的字形才換。
+    // 只看到一次就換的話，背景剛好有幾個很亮的點（半透明視窗後面的東西）就會把正確的字形換成壞的
+    private readonly Dictionary<char, Glyph> _pending = [];
+
     /// <summary>認得幾個字。</summary>
     public int Count => _glyphs.Count;
 
@@ -72,8 +76,8 @@ public sealed class GlyphStore
 
     /// <summary>
     /// 從一列學字形：name 是這一列的名稱，cells 是這一列每一格的字形。
-    /// onlyNew＝false（文字辨識讀到的和 Excel 完全一樣的列）：已經認得、但這次不一樣的字換成這次的
-    /// （例如版面位置調整過，舊的字形都不能用了）。
+    /// onlyNew＝false（文字辨識讀到的和 Excel 完全一樣的列）：已經認得、但字形不一樣的字，
+    /// 連續兩次看到同一個新的字形才換（例如版面位置調整過，舊的字形都不能用了；只看到一次的可能是背景的亮點）。
     /// onlyNew＝true（使用者確認的、或模糊比對和字形都指向同一個名稱的列）：只學還不認得的字，
     /// 而且這一列不能和已經認得的字形有任何矛盾，免得學錯。
     /// </summary>
@@ -91,12 +95,26 @@ public sealed class GlyphStore
             {
                 continue;
             }
-            bool known = _glyphs.TryGetValue(display[i], out Glyph? old);
-            if (known && (onlyNew || old!.Matches(cell)))
+            char c = display[i];
+            if (_glyphs.TryGetValue(c, out Glyph? old))
             {
-                continue;
+                if (old.Matches(cell))
+                {
+                    _pending.Remove(c); // 和認得的一樣：之前那一次不一樣的不算數
+                    continue;
+                }
+                if (onlyNew)
+                {
+                    continue;
+                }
+                if (!_pending.TryGetValue(c, out Glyph? pending) || !pending.Matches(cell))
+                {
+                    _pending[c] = cell; // 第一次看到這個新的字形：先記著
+                    continue;
+                }
+                _pending.Remove(c);
             }
-            Set(display[i], cell);
+            Set(c, cell);
             Dirty = true;
         }
     }
