@@ -2,7 +2,8 @@
 // 記住每個字在遊戲清單上的字形，用來比對文字辨識讀不出來、讀錯的列（不靠文字辨識，見 Ocr/Glyph.cs）。
 //
 // 字形從「文字辨識讀到的字和 Excel 的名稱完全一樣」的列學來：那一列的每一格就是名稱裡每個字的字形。
-// 學到的字形存在程式旁邊的 GVODiscoverySync.Glyphs.json，下次執行繼續用，所以越用認得的字越多。
+// 程式內建一份字形表（BuiltInGlyphs.json，包在 exe 裡），所以一開始就認得大部分的字。
+// 這台電腦另外學到的字形存在程式旁邊的 GVODiscoverySync.Glyphs.json，下次執行繼續用，所以越用認得的字越多。
 // 這個檔案是程式自己維護的，不用手動改；刪掉也沒關係，會重新學。
 
 using System;
@@ -163,33 +164,67 @@ public sealed class GlyphStore
     public string Read(IReadOnlyList<Glyph>? cells)
         => cells is null ? "" : string.Concat(cells.Select(c => _chars.TryGetValue(c.ToString(), out HashSet<char>? chars) ? chars.Min() : '？'));
 
-    /// <summary>從檔案讀取（檔案不存在、壞掉時從空的開始，重新學就好）。</summary>
-    public static GlyphStore Load(string? path = null)
+    // 內建的字形（包在 exe 裡的 BuiltInGlyphs.json）：存檔時和內建一樣的不用存
+    private readonly Dictionary<char, string> _builtIn = [];
+
+    /// <summary>
+    /// 讀取字形表：先放內建的（includeBuiltIn；作者把所有分類掃過幾輪學到的，所以一開始就認得大部分的字），
+    /// 再放檔案裡的（這台電腦自己學到的，和內建不同時以檔案為準）。
+    /// 檔案不存在、壞掉時只用內建的，重新學就好。
+    /// </summary>
+    public static GlyphStore Load(string? path = null, bool includeBuiltIn = true)
     {
         GlyphStore store = new();
+        if (includeBuiltIn)
+        {
+            try
+            {
+                using Stream? stream = typeof(GlyphStore).Assembly.GetManifestResourceStream("BuiltInGlyphs.json");
+                if (stream is not null)
+                {
+                    using StreamReader reader = new(stream);
+                    store.Add(reader.ReadToEnd(), builtIn: true);
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or IOException)
+            {
+                // 內建的讀不了：從空的開始
+            }
+        }
         try
         {
             path ??= DefaultPath;
             if (File.Exists(path))
             {
-                Dictionary<string, string>? saved = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path), JsonOptions);
-                foreach ((string key, string value) in saved ?? [])
-                {
-                    if (key.Length == 1 && Glyph.Parse(value) is Glyph glyph)
-                    {
-                        store.Set(key[0], glyph);
-                    }
-                }
+                store.Add(File.ReadAllText(path), builtIn: false);
             }
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            // 讀不了：從空的開始
+            // 讀不了：只用內建的
         }
         return store;
     }
 
-    /// <summary>有學到新的字形才存檔。存不了（例如唯讀資料夾）就算了，這次執行照樣能用。</summary>
+    private void Add(string json, bool builtIn)
+    {
+        Dictionary<string, string>? saved = JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions);
+        foreach ((string key, string value) in saved ?? [])
+        {
+            if (key.Length == 1 && Glyph.Parse(value) is Glyph glyph)
+            {
+                Set(key[0], glyph);
+                if (builtIn)
+                {
+                    _builtIn[key[0]] = glyph.ToString();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 有學到新的字形才存檔（只存內建沒有、或和內建不同的字）。存不了（例如唯讀資料夾）就算了，這次執行照樣能用。
+    /// </summary>
     public void SaveIfDirty(string? path = null)
     {
         if (!Dirty)
@@ -199,6 +234,7 @@ public sealed class GlyphStore
         try
         {
             Dictionary<string, string> saved = _glyphs.OrderBy(p => p.Key)
+                .Where(p => !_builtIn.TryGetValue(p.Key, out string? builtIn) || builtIn != p.Value.ToString())
                 .ToDictionary(p => p.Key.ToString(), p => p.Value.ToString());
             AtomicFile.WriteAllText(path ?? DefaultPath, JsonSerializer.Serialize(saved, JsonOptions));
             Dirty = false;

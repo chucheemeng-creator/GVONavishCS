@@ -86,7 +86,7 @@ public class GlyphTests
         {
             store.SaveIfDirty(path);
             Assert.False(store.Dirty);
-            GlyphStore loaded = GlyphStore.Load(path);
+            GlyphStore loaded = GlyphStore.Load(path, includeBuiltIn: false);
             Assert.Equal(3, loaded.Count);
             Assert.Equal(GlyphVerdict.Full, loaded.Check("獵戶座", Cells(client, 5, "獵戶座")));
         }
@@ -94,6 +94,20 @@ public class GlyphTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void 內建的字形表()
+    {
+        // 沒有檔案時也認得內建的字；和內建一樣的不存檔，只存這台電腦另外學到的
+        string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
+        GlyphStore store = GlyphStore.Load(path);
+        Assert.Equal(1806, store.Count);
+        Assert.False(store.Dirty);
+
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        Assert.Equal("獵戶座", store.Read(Cells(client, 5, "獵戶座"))); // 內建的字形和截圖上的一樣
+        Assert.Equal(GlyphVerdict.Full, store.Check("夏季大三角", Cells(client, 7, "夏季大三角")));
     }
 
     [Fact]
@@ -249,7 +263,7 @@ public class GlyphTests
         // 使用者把所有分類掃過一輪學到的字形表（1768 個字），和第二輪仍然認不出來的一頁（鳥類）。
         // 文字辨識：第 3 列讀不出來、第 4 列讀成「琵閆」（找不到）、第 7 列讀成「黑天」（80%）、第 8 列漏了「鸚」
         using Bitmap client = Screen("birds-rose-spoonbill.png");
-        GlyphStore store = GlyphStore.Load(TestBook.DataPath("Glyphs-round1.json"));
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("Glyphs-round1.json"), includeBuiltIn: false);
         Assert.Equal(1768, store.Count);
         DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
         (string Name, string Read)[] rows =
