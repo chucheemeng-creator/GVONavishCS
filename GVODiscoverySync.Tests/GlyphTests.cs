@@ -158,7 +158,6 @@ public class GlyphTests
             File.Delete(path);
         }
     }
-    }
 
     [Fact]
     public void Excel和遊戲用的字不一樣_手動指定之後認得()
