@@ -31,8 +31,10 @@ namespace GVODiscoverySync.Ocr;
 /// 這一列有字、但怎麼讀都讀不出來時（常見於一、兩個字的短名稱，例如「蠶」），Readings 是空的、Text 是 ""。
 /// TextWidth 是這一列的字從畫面上量到的寬度（遊戲原本的像素，0 表示沒量到）。
 /// 清單的字型每個中文字一樣寬，所以就算辨識漏了字，也看得出名稱原本有幾個字。
+/// Glyphs 是這一列每一格（一個中文字寬）的字形，用來比對字形（見 Glyph）；沒有放大顯示（縮放 1）時才有，否則是 null。
 /// </summary>
-public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings, double TextWidth);
+public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings, double TextWidth,
+    IReadOnlyList<Glyph>? Glyphs = null);
 
 /// <summary>一次辨識的結果。</summary>
 public sealed class ListSnapshot
@@ -303,7 +305,8 @@ public sealed class DiscoveryListReader
         List<ListRow> rows = [];
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
-            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, Layout.RowHeight, scale), texts, Width(row)));
+            rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, Layout.RowHeight, scale), texts, Width(row),
+                ReadGlyphs(client, Layout, row, scale, Width(row))));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -475,6 +478,50 @@ public sealed class DiscoveryListReader
             sb.Append(word.Text);
         }
         return sb.ToString().Replace(" ", "");
+    }
+
+    // 清單上的字從清單左邊算起第幾個遊戲像素開始（第一個字那一格的左邊；實測）
+    private const int GlyphOriginX = 3;
+
+    // 字的筆畫的亮度：字是純色（最亮的色版是 255）、沒有平滑處理；選取的那一列底色大約 160，比這個暗
+    private const int GlyphThreshold = 240;
+
+    /// <summary>
+    /// 清單第 row 列每一格（一個中文字寬）的字形。textWidth 是這一列量到的字寬（決定有幾格）。
+    /// 遊戲畫面被 Windows 放大（縮放不是 1）時點會糊掉、不能直接比對，回傳 null；量不到字寬時也是 null。
+    /// </summary>
+    public static IReadOnlyList<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth)
+    {
+        if (Math.Abs(scale - 1) > 0.001 || textWidth <= 0)
+        {
+            return null;
+        }
+        int count = (int)Math.Round((textWidth + 2) / Glyph.Width);
+        Rectangle list = ToScreen(layout.ListX, layout.ListY, layout.ListWidth, layout.ListHeight, client.Size, scale);
+        Rectangle r = new(list.X + GlyphOriginX, list.Y + row * layout.RowHeight, count * Glyph.Width, layout.RowHeight);
+        if (count < 1 || !new Rectangle(Point.Empty, client.Size).Contains(r) || r.Right > list.Right)
+        {
+            return null;
+        }
+        byte[] bytes = GetPixelBytes(client, r, out int stride);
+        List<Glyph> glyphs = [];
+        for (int i = 0; i < count; i++)
+        {
+            ushort[] rows = new ushort[r.Height];
+            for (int y = 0; y < r.Height; y++)
+            {
+                int bits = 0;
+                for (int x = 0; x < Glyph.Width; x++)
+                {
+                    int o = y * stride + (i * Glyph.Width + x) * 4;
+                    bool ink = Math.Max(bytes[o], Math.Max(bytes[o + 1], bytes[o + 2])) >= GlyphThreshold;
+                    bits = (bits << 1) | (ink ? 1 : 0);
+                }
+                rows[y] = (ushort)bits;
+            }
+            glyphs.Add(new Glyph(rows));
+        }
+        return glyphs;
     }
 
     /// <summary>

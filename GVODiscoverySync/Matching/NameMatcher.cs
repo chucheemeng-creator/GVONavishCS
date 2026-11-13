@@ -437,6 +437,13 @@ public sealed class NameMatcher
         }
     }
 
+    // 這個字在遊戲上確定是一個中文字寬（英數字、括號等符號不確定）
+    private static bool IsFullWidth(char c)
+        => c is '·' or '・' or '‧' || !(c < 0x80 || (c >= '\uFF00' && c <= '\uFFEF') || !char.IsLetter(c));
+
+    /// <summary>名稱的每個字在遊戲上都確定是一個中文字寬（可以一格一格切開比對字形）。</summary>
+    public static bool IsFullWidthName(string name) => name.Length > 0 && name.All(IsFullWidth);
+
     // 名稱的寬度範圍（半形字的單位，中文字算 2）。
     // 間隔號不管 Excel 寫成 ·、・、‧ 哪一種，遊戲上都是一個中文字寬（實測「埃努瑪·埃里什」是 7 個字寬），算 2。
     // 英數字、括號等其他符號，Excel 和遊戲的全形／半形不一定一樣
@@ -447,8 +454,7 @@ public sealed class NameMatcher
         int min = 0, max = 0;
         foreach (char c in name.Trim())
         {
-            bool unsure = c is not ('·' or '・' or '‧')
-                          && (c < 0x80 || (c >= '\uFF00' && c <= '\uFFEF') || !char.IsLetter(c));
+            bool unsure = !IsFullWidth(c);
             min += unsure ? 1 : 2;
             max += 2;
         }

@@ -39,6 +39,9 @@ public sealed class MainForm : Form
 
     // 名稱對照表（Excel 的寫法 → 遊戲上的寫法；獨立的檔案，程式開著也可以改）
     private readonly MappingFile _nameAliases;
+
+    // 學過的字形（比對文字辨識讀不出來、讀錯的列；存在 GVODiscoverySync.Glyphs.json，越用認得的字越多）
+    private readonly GlyphStore _glyphs = GlyphStore.Load();
     private readonly string? _nameAliasProblem;
     private readonly GameWindow _window = new();
     private readonly DiscoveryListReader? _reader;
@@ -315,7 +318,7 @@ public sealed class MainForm : Form
             DiscoveryBook book = DiscoveryBook.Load(path);
             _book = book;
             _matcher = new NameMatcher(book, _confusions.Map);
-            _session = new DiscoverySession(book, _matcher)
+            _session = new DiscoverySession(book, _matcher, _glyphs)
             {
                 Added = OnFoundAdded,
                 Updated = UpdateRow,
@@ -644,6 +647,7 @@ public sealed class MainForm : Form
             SetStatus($"{category}{how}（{sortText}）：這一頁讀到 {snapshot.Rows.Count} 筆，新出現 {page.Added} 筆。" +
                       $"這個分類目前對到 {page.Listed}／{page.Total} 個。");
             UpdateSummary();
+            _glyphs.SaveIfDirty(); // 這一頁學到新的字形就存起來
         }
         finally
         {
@@ -927,7 +931,7 @@ public sealed class MainForm : Form
         }
         else
         {
-            status = "新增";
+            status = f.ByGlyph ? "新增（字形比對）" : "新增";
             color = UiColors.PickForList(Color.SeaGreen, Color.LightGreen);
             check = true;
         }
@@ -1015,6 +1019,7 @@ public sealed class MainForm : Form
                     $"縮放 {scale}、辨識放大 {_reader.OcrScale} 倍、語言 {_reader.LanguageName}",
                     $"標題：「{snapshot.TitleText}」（{snapshot.TitleScale} 倍）→ 分類：{_matcher?.MatchCategory(snapshot.TitleText) ?? "（對不到）"}",
                     $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]) ?? "（推測不出來）"}",
+                    $"認得的字形：{_glyphs.Count} 個{(snapshot.Rows.Any(r => r.Glyphs is not null) ? "" : "（這張畫面不能比對字形：有放大顯示，或量不到字寬）")}",
                 ];
                 // 每一列：辨識讀到的原文 → 比對結果（套用錯字對照表、同一頁推斷之後，和實際讀取時一樣）
                 string? category = _matcher?.MatchCategory(snapshot.TitleText)
@@ -1037,6 +1042,11 @@ public sealed class MainForm : Form
                         result = m.Item is null ? " → 找不到"
                             : $" → {m.Item.Name}（{(m.Score == 0 ? "推斷" : m.Score.ToString("0%", CultureInfo.InvariantCulture))}" +
                               $"{(m.Ambiguous ? "，不確定" : "")}{(m.IsVariant ? "，同名的一組" : "")}）";
+                        // 結果的字不是文字辨識讀到的：是比對字形認出來的
+                        if (m.Score >= 1 && picks[at].Text != "" && !row.Readings.Contains(picks[at].Text))
+                        {
+                            result += "〔字形比對〕";
+                        }
                     }
                     lines.Add($"第 {row.Index + 1} 列：{read}{(row.HasCard ? "（有卡片）" : "")}{result}");
                 }
@@ -1237,6 +1247,7 @@ public sealed class MainForm : Form
         _settings.WindowHeight = bounds.Height;
         _settings.Character = Character;
         _settings.Save();
+        _glyphs.SaveIfDirty();
         base.OnFormClosing(e);
     }
 

@@ -18,8 +18,14 @@ public enum SortMode { Unknown, ByValue, ByName }
 /// <summary>加入一頁的結果：新出現幾筆、這一頁的排序、這個分類目前對到幾個／Excel 裡共幾個。</summary>
 public sealed record PageResult(int Added, SortMode PageSort, int Listed, int Total);
 
-public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
+public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, GlyphStore? glyphs = null)
 {
+    /// <summary>學過的字形（比對文字辨識讀不出來、讀錯的列）；沒給就不比對字形。</summary>
+    public GlyphStore? Glyphs => glyphs;
+
+    // 這一頁用字形認出來的列（Analyze 填，AddPage 用來在結果上做記號）
+    private readonly List<MatchResult> _glyphMatches = [];
+
     /// <summary>新加了一筆（畫面要加一列）。</summary>
     public Action<Found>? Added { get; set; }
 
@@ -96,11 +102,66 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             (string text, MatchResult match) = PickBestReading(category, row);
             picks.Add((row, text, match));
         }
+        ApplyGlyphs(category, picks, remember);
         // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
         SortMode mode = DetectSort(picks, remember);
         ResolveWithinPage(category, picks, mode);
         return picks;
     }
+
+    /// <summary>
+    /// 比對字形：先從這一頁「讀到的字和 Excel 完全一樣」的列學字形（learn），
+    /// 再看其他的列（讀不出來、讀錯、不確定）：這個分類裡只有一個名稱每個字的字形都對得上，就是它。
+    /// 字形是逐點比對的，比文字辨識的模糊比對可靠，所以也會蓋過模糊比對的結果。
+    /// </summary>
+    private void ApplyGlyphs(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool learn)
+    {
+        _glyphMatches.Clear();
+        if (glyphs is null)
+        {
+            return;
+        }
+        if (learn)
+        {
+            foreach ((ListRow row, _, MatchResult match) in picks)
+            {
+                if (match.IsMatch && match.Score >= 1)
+                {
+                    glyphs.Learn(match.Item!.Name, row.Glyphs);
+                }
+            }
+        }
+        if (glyphs.Count == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < picks.Count; i++)
+        {
+            (ListRow row, _, MatchResult match) = picks[i];
+            if (row.Glyphs is null || (match.IsMatch && match.Score >= 1))
+            {
+                continue;
+            }
+            List<IReadOnlyList<DiscoveryItem>> full = [.. matcher.Between(category, null, null)
+                .Where(g => glyphs.Check(g[0].Name, row.Glyphs) == GlyphVerdict.Full)];
+            if (full.Count != 1)
+            {
+                continue;
+            }
+            // 用遊戲上的寫法再比對一次，得到和「讀到完全一樣的字」相同的結果（同名的一組也照平常的方式處理）
+            string name = NameMatcher.SortKey(full[0][0].Name);
+            MatchResult exact = matcher.Match(category, name, row.TextWidth);
+            if (exact.IsMatch && exact.Score >= 1)
+            {
+                picks[i] = (row, name, exact);
+                _glyphMatches.Add(exact);
+            }
+        }
+    }
+
+    // 這一列的字形和這個名稱（同名的一組）對不上：認得的字裡有不一樣的
+    private bool GlyphMismatch(IReadOnlyList<DiscoveryItem> group, ListRow row)
+        => glyphs is not null && glyphs.Check(group[0].Name, row.Glyphs) == GlyphVerdict.Mismatch;
 
     /// <summary>
     /// 讀到的一頁：每一列挑最像的讀法、判斷排序、同一頁推斷，然後加進結果（新的一筆用 Added 通知畫面）。
@@ -170,6 +231,15 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             added += AddVariants(category, match, rows);
         }
         RemoveStale(category, picks);
+        // 這一頁用字形認出來、這次加進來（或從「推斷」換成這個結果）的幾筆：做記號，畫面上顯示「字形比對」
+        foreach (Found f in _matched.Values)
+        {
+            if (!f.ByGlyph && !f.Manual && _glyphMatches.Exists(m => ReferenceEquals(m, f.Match)))
+            {
+                f.ByGlyph = true;
+                Updated?.Invoke(f, false);
+            }
+        }
         int listed = _matched.Values.Count(f => f.Category == category);
         int total = book.Categories.TryGetValue(category, out List<DiscoveryItem>? items) ? items.Count : 0;
         return new PageResult(added, _pageSort, listed, total);
@@ -358,6 +428,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                         List<IReadOnlyList<DiscoveryItem>> between = [.. matcher.Between(category, lower, upper)
                             .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
                             .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))
+                            .Where(g => !GlyphMismatch(g, row)) // 認得的字對不上的不是它
                             .Where(fitsMerit)];
                         if (between.Count == 1)
                         {
@@ -389,6 +460,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), lower) >= 0)
                     .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), upper) <= 0)
                     .Where(c => fitsMerit(c.Items))
+                    .Where(c => !GlyphMismatch(c.Items, row))
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {
