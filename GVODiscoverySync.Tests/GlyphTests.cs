@@ -102,7 +102,7 @@ public class GlyphTests
         // 沒有檔案時也認得內建的字；和內建一樣的不存檔，只存這台電腦另外學到的
         string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
         GlyphStore store = GlyphStore.Load(path);
-        Assert.Equal(1807, store.Count);
+        Assert.Equal(1845, store.Count);
         Assert.False(store.Dirty);
 
         using Bitmap client = Screen("astronomy-all-cards.png");
@@ -127,9 +127,37 @@ public class GlyphTests
         store.Learn("座", [crow[0]]);
         Assert.Equal(GlyphVerdict.Full, store.Check("獵戶座", orion));
 
-        // 連續兩次都是同一個新的字形：換
+        // 連續兩次都是同一個新的字形：換成新的，舊的留作另一種字形（兩種都算「座」）
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("座", [crow[0]]));
         store.Learn("座", [crow[0]]);
-        Assert.Equal(GlyphVerdict.Mismatch, store.Check("獵戶座", orion));
+        Assert.Equal(GlyphVerdict.Full, store.Check("座", [crow[0]]));
+        Assert.Equal(GlyphVerdict.Full, store.Check("獵戶座", orion));
+    }
+
+    [Fact]
+    public void 同一個字在遊戲上有兩種字形_內建兩種都認得()
+    {
+        // 實際的情況：「彗」在有的名稱裡是另一種字形。只留一種的話，兩種會輪流把對方換掉
+        Glyph first = Glyph.Parse("0000000000000810" + "7ffe08103e7e0810" + "1ffe681000003ff8" + "0008fffe00080008" + "3ff8000800000000")!;
+        Glyph second = Glyph.Parse("0000000000000810" + "7ffe7e7e08107ffe" + "00101ff800087ffe" + "00081ff829a42892" + "4ff2000000000000")!;
+        string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
+        try
+        {
+            GlyphStore store = GlyphStore.Load(path);
+            Assert.Equal(GlyphVerdict.Full, store.Check("彗", [first]));
+            Assert.Equal(GlyphVerdict.Full, store.Check("彗", [second]));
+
+            // 這台電腦的檔案裡只有其中一種（舊版存的）：內建的另一種照樣認得
+            File.WriteAllText(path, "{\"彗\": \"" + second + "\"}");
+            store = GlyphStore.Load(path);
+            Assert.Equal(GlyphVerdict.Full, store.Check("彗", [first]));
+            Assert.Equal(GlyphVerdict.Full, store.Check("彗", [second]));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
     }
 
     [Fact]
@@ -258,7 +286,7 @@ public class GlyphTests
             Assert.True(f.ByGlyph, name);
             Assert.False(f.NeedsConfirm, name);
         }
-        Assert.Equal(1807, store.Count); // 放大顯示時不學
+        Assert.Equal(1845, store.Count); // 放大顯示時不學
         Assert.False(store.Dirty);
     }
 

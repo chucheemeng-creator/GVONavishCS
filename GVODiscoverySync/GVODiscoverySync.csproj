@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <!-- 版本號：發佈新版時只要改這裡 -->
-    <Version>0.2.61</Version>
+    <Version>0.2.62</Version>
     <OutputType>WinExe</OutputType>
     <!-- Windows 內建的文字辨識（Windows.Media.Ocr）需要指定 Windows 10 SDK 版本 -->
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 內建的字形表（比對字形用；掃過所有分類學到的 1807 個字，包在 exe 裡） -->
+    <!-- 內建的字形表（比對字形用；掃過所有分類學到的 1845 個字，包在 exe 裡） -->
     <EmbeddedResource Include="BuiltInGlyphs.json" LogicalName="BuiltInGlyphs.json" />
   </ItemGroup>
 

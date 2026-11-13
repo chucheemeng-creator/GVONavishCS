@@ -86,7 +86,7 @@ public sealed class GlyphStore
     /// <summary>
     /// 從一列學字形：name 是這一列的名稱，cells 是這一列每一格的字形。
     /// onlyNew＝false（文字辨識讀到的和 Excel 完全一樣的列）：已經認得、但字形不一樣的字，
-    /// 連續兩次看到同一個新的字形才換（例如版面位置調整過，舊的字形都不能用了；只看到一次的可能是背景的亮點）。
+    /// 連續兩次看到同一個新的字形才換（只看到一次的可能是背景的亮點）；舊的字形留作另一種字形。
     /// onlyNew＝true（使用者確認的、或模糊比對和字形都指向同一個名稱的列）：只學還不認得的字，
     /// 而且這一列不能和已經認得的字形有任何矛盾，免得學錯。
     /// </summary>
@@ -128,18 +128,21 @@ public sealed class GlyphStore
         }
     }
 
+    // 換掉一個字的字形時，舊的不丟，留作那個字的「另一種字形」：
+    // 遊戲上同一個字可能有兩種寫法（「彗」在有的名稱裡是另一種字形），只留一種的話兩種會輪流把對方換掉
     private void Set(char c, Glyph glyph)
     {
-        if (_glyphs.TryGetValue(c, out Glyph? old) && _chars.TryGetValue(old.ToString(), out HashSet<char>? oldChars))
+        _glyphs.TryGetValue(c, out Glyph? old);
+        if (_variants.TryGetValue(c, out List<Glyph>? others))
         {
-            oldChars.Remove(c);
-            if (oldChars.Count == 0)
-            {
-                _chars.Remove(old.ToString());
-            }
+            others.RemoveAll(o => o.Matches(glyph)); // 新的主要字形原本是另一種字形：不用留兩份
         }
         _glyphs[c] = glyph;
         AddReverse(c, glyph);
+        if (old is not null && !old.IsEmpty)
+        {
+            AddVariant(c, old); // 和新的一樣時 AddVariant 不會加
+        }
     }
 
     private void AddReverse(char c, Glyph glyph)
@@ -307,7 +310,7 @@ public sealed class GlyphStore
 
     /// <summary>
     /// 讀取字形表：先放內建的（includeBuiltIn；作者把所有分類掃過幾輪學到的，所以一開始就認得大部分的字），
-    /// 再放檔案裡的（這台電腦自己學到的，和內建不同時以檔案為準）。
+    /// 再放檔案裡的（這台電腦自己學到的；和內建不同時檔案裡的當主要的字形，內建的留作另一種字形）。
     /// 檔案不存在、壞掉時只用內建的，重新學就好。
     /// </summary>
     public static GlyphStore Load(string? path = null, bool includeBuiltIn = true)
