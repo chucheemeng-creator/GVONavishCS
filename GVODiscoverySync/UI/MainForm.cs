@@ -427,6 +427,15 @@ public sealed class MainForm : Form
             {
                 Cursor = Cursors.WaitCursor;
                 WriteResult result = _book.WriteMarks(character, items);
+                // 寫入的都是使用者勾選、確認過的：學這些列裡還不認得的字（「推斷，請確認」的短名稱靠這個學起來）
+                foreach (Found f in _session?.All ?? [])
+                {
+                    if (f.Item is not null && result.Written.Contains(f.Item))
+                    {
+                        _session!.Confirm(f);
+                    }
+                }
+                _glyphs.SaveIfDirty();
                 RefreshAllRows();
                 UpdateSummary();
                 string message = $"已寫入 {result.Written.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(result.BackupPath)}";
@@ -1048,7 +1057,8 @@ public sealed class MainForm : Form
                             result += "〔字形比對〕";
                         }
                     }
-                    lines.Add($"第 {row.Index + 1} 列：{read}{(row.HasCard ? "（有卡片）" : "")}{result}");
+                    string glyphRead = row.Glyphs is null ? "" : $"〔字形：{_glyphs.Read(row.Glyphs)}〕";
+                    lines.Add($"第 {row.Index + 1} 列：{read}{glyphRead}{(row.HasCard ? "（有卡片）" : "")}{result}");
                 }
                 File.WriteAllLines(stem + ".txt", lines);
             }

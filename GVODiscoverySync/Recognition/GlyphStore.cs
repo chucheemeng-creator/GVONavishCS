@@ -21,13 +21,13 @@ namespace GVODiscoverySync.Recognition;
 /// <summary>名稱和一列的字形比對的結果。</summary>
 public enum GlyphVerdict
 {
-    /// <summary>不能比（字數不同、名稱裡有寬度不確定的字、認得的字一個都沒有）。</summary>
+    /// <summary>不能比（字數不同、名稱裡有寬度不確定的字），或沒有矛盾但名稱裡的字一個都不認得。</summary>
     Unknown,
 
     /// <summary>有認得的字對不上：這一列不是這個名稱。</summary>
     Mismatch,
 
-    /// <summary>認得的字都對得上，但還有不認得的字。</summary>
+    /// <summary>認得的字都對得上、不認得的字那幾格也不是別的認得的字，但還有不認得的字。</summary>
     Partial,
 
     /// <summary>每個字都認得、都對得上：這一列就是這個名稱。</summary>
@@ -45,6 +45,9 @@ public sealed class GlyphStore
     };
 
     private readonly Dictionary<char, Glyph> _glyphs = [];
+
+    // 反過來查：這個字形是哪個字（「·」「‧」「・」在遊戲上是同一個字形，所以可能不只一個）
+    private readonly Dictionary<string, HashSet<char>> _chars = [];
 
     /// <summary>認得幾個字。</summary>
     public int Count => _glyphs.Count;
@@ -67,12 +70,15 @@ public sealed class GlyphStore
     }
 
     /// <summary>
-    /// 從一列學字形：name 是這一列確定的名稱（文字辨識讀到的和 Excel 完全一樣）。
-    /// 已經認得、但這次不一樣的字換成這次的（例如版面位置調整過，舊的字形都不能用了）。
+    /// 從一列學字形：name 是這一列的名稱，cells 是這一列每一格的字形。
+    /// onlyNew＝false（文字辨識讀到的和 Excel 完全一樣的列）：已經認得、但這次不一樣的字換成這次的
+    /// （例如版面位置調整過，舊的字形都不能用了）。
+    /// onlyNew＝true（使用者確認的、或模糊比對和字形都指向同一個名稱的列）：只學還不認得的字，
+    /// 而且這一列不能和已經認得的字形有任何矛盾，免得學錯。
     /// </summary>
-    public void Learn(string name, IReadOnlyList<Glyph>? cells)
+    public void Learn(string name, IReadOnlyList<Glyph>? cells, bool onlyNew = false)
     {
-        if (!Comparable(name, cells))
+        if (!Comparable(name, cells) || (onlyNew && Check(name, cells) == GlyphVerdict.Mismatch))
         {
             return;
         }
@@ -84,39 +90,78 @@ public sealed class GlyphStore
             {
                 continue;
             }
-            if (!_glyphs.TryGetValue(display[i], out Glyph? known) || !known.Matches(cell))
-            {
-                _glyphs[display[i]] = cell;
-                Dirty = true;
-            }
-        }
-    }
-
-    /// <summary>名稱 name 和這一列的字形（cells）對不對得上。</summary>
-    public GlyphVerdict Check(string name, IReadOnlyList<Glyph>? cells)
-    {
-        if (!Comparable(name, cells))
-        {
-            return GlyphVerdict.Unknown;
-        }
-        string display = NameMatcher.SortKey(name).Trim();
-        int known = 0;
-        for (int i = 0; i < display.Length; i++)
-        {
-            if (!_glyphs.TryGetValue(display[i], out Glyph? glyph))
+            bool known = _glyphs.TryGetValue(display[i], out Glyph? old);
+            if (known && (onlyNew || old!.Matches(cell)))
             {
                 continue;
             }
-            if (!glyph.Matches(cells![i]))
+            Set(display[i], cell);
+            Dirty = true;
+        }
+    }
+
+    private void Set(char c, Glyph glyph)
+    {
+        if (_glyphs.TryGetValue(c, out Glyph? old) && _chars.TryGetValue(old.ToString(), out HashSet<char>? oldChars))
+        {
+            oldChars.Remove(c);
+            if (oldChars.Count == 0)
+            {
+                _chars.Remove(old.ToString());
+            }
+        }
+        _glyphs[c] = glyph;
+        string key = glyph.ToString();
+        if (!_chars.TryGetValue(key, out HashSet<char>? chars))
+        {
+            chars = [];
+            _chars[key] = chars;
+        }
+        chars.Add(c);
+    }
+
+    /// <summary>
+    /// 名稱 name 和這一列的字形（cells）對不對得上。每一格：
+    /// 名稱的這個字認得 → 字形要一樣；不認得 → 這一格不能是別的認得的字（不同的字字形一定不同）。
+    /// 所以認得的格子等於已經「讀」出來了，名稱在那些位置的字一定要一樣。
+    /// </summary>
+    public GlyphVerdict Check(string name, IReadOnlyList<Glyph>? cells)
+    {
+        string display = NameMatcher.SortKey(name).Trim();
+        if (!Comparable(name, cells))
+        {
+            // 不能一格一格比（字數不同，或名稱裡有英數字、括號，格子對不齊）：
+            // 但這一列有哪一格是認得的字、名稱裡卻沒有這個字，就一定不是它
+            if (cells is not null && cells.Any(c => _chars.TryGetValue(c.ToString(), out HashSet<char>? chars) && !chars.Any(display.Contains)))
             {
                 return GlyphVerdict.Mismatch;
             }
-            known++;
+            return GlyphVerdict.Unknown;
+        }
+        int known = 0;
+        for (int i = 0; i < display.Length; i++)
+        {
+            if (_glyphs.TryGetValue(display[i], out Glyph? glyph))
+            {
+                if (!glyph.Matches(cells![i]))
+                {
+                    return GlyphVerdict.Mismatch;
+                }
+                known++;
+            }
+            else if (_chars.ContainsKey(cells![i].ToString()))
+            {
+                return GlyphVerdict.Mismatch; // 這一格是另一個認得的字
+            }
         }
         return known == display.Length ? GlyphVerdict.Full
             : known > 0 ? GlyphVerdict.Partial
             : GlyphVerdict.Unknown;
     }
+
+    /// <summary>這一列每一格認出來的字（不認得的是「？」），除錯輸出用。</summary>
+    public string Read(IReadOnlyList<Glyph>? cells)
+        => cells is null ? "" : string.Concat(cells.Select(c => _chars.TryGetValue(c.ToString(), out HashSet<char>? chars) ? chars.Min() : '？'));
 
     /// <summary>從檔案讀取（檔案不存在、壞掉時從空的開始，重新學就好）。</summary>
     public static GlyphStore Load(string? path = null)
@@ -132,7 +177,7 @@ public sealed class GlyphStore
                 {
                     if (key.Length == 1 && Glyph.Parse(value) is Glyph glyph)
                     {
-                        store._glyphs[key[0]] = glyph;
+                        store.Set(key[0], glyph);
                     }
                 }
             }

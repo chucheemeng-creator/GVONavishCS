@@ -110,9 +110,12 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
     }
 
     /// <summary>
-    /// 比對字形：先從這一頁「讀到的字和 Excel 完全一樣」的列學字形（learn），
-    /// 再看其他的列（讀不出來、讀錯、不確定）：這個分類裡只有一個名稱每個字的字形都對得上，就是它。
-    /// 字形是逐點比對的，比文字辨識的模糊比對可靠，所以也會蓋過模糊比對的結果。
+    /// 比對字形：先從這一頁「讀到的字和 Excel 完全一樣」的列學字形（learn），再看其他的列（讀不出來、讀錯、不確定）。
+    /// 認得的格子等於已經讀出來了（例如「南非兀？」），這個分類裡字數相同、和這些格子不矛盾的名稱只剩一個時：
+    ///   - 每個字都認得：確定是它（字形是逐點比對的，比模糊比對可靠，所以也會蓋過模糊比對的結果）
+    ///   - 還有不認得的字，但文字辨識的模糊比對也指向它：兩種證據一致，確定是它，順便學會不認得的字
+    ///   - 還有不認得的字，文字辨識又沒讀出來：推斷是它，請使用者確認（確認、寫入後才學）
+    /// 模糊比對對到的名稱如果和字形矛盾，那個結果不採用。
     /// </summary>
     private void ApplyGlyphs(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool learn)
     {
@@ -137,25 +140,59 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         }
         for (int i = 0; i < picks.Count; i++)
         {
-            (ListRow row, _, MatchResult match) = picks[i];
+            (ListRow row, string text, MatchResult match) = picks[i];
             if (row.Glyphs is null || (match.IsMatch && match.Score >= 1))
             {
                 continue;
             }
-            List<IReadOnlyList<DiscoveryItem>> full = [.. matcher.Between(category, null, null)
-                .Where(g => glyphs.Check(g[0].Name, row.Glyphs) == GlyphVerdict.Full)];
-            if (full.Count != 1)
+            // 字數對得上、字形不矛盾的名稱（有括號、英數字的名稱不能比對字形，只要字數可能對得上就算一個）
+            List<IReadOnlyList<DiscoveryItem>> possible = [.. matcher.Between(category, null, null)
+                .Where(g => NameMatcher.FitsWidth(g, row.TextWidth) && !GlyphMismatch(g, row))];
+            // 模糊比對對到的名稱和字形矛盾（認得的字對不上）：那個結果一定是錯的
+            bool contradicted = match.IsMatch && GlyphMismatch(match.IsVariant ? match.Variants : [match.Item!], row);
+            if (possible.Count != 1)
             {
+                if (contradicted)
+                {
+                    picks[i] = (row, text, new MatchResult(match.Item, match.Score, true, match.Variants)); // 改成不確定
+                }
                 continue;
             }
-            // 用遊戲上的寫法再比對一次，得到和「讀到完全一樣的字」相同的結果（同名的一組也照平常的方式處理）
-            string name = NameMatcher.SortKey(full[0][0].Name);
-            MatchResult exact = matcher.Match(category, name, row.TextWidth);
-            if (exact.IsMatch && exact.Score >= 1)
+            IReadOnlyList<DiscoveryItem> only = possible[0];
+            GlyphVerdict verdict = glyphs.Check(only[0].Name, row.Glyphs);
+            bool ocrAgrees = match.IsMatch && match.Score > 0 && only.Contains(match.Item!);
+            if (verdict == GlyphVerdict.Full || (verdict == GlyphVerdict.Partial && ocrAgrees))
             {
-                picks[i] = (row, name, exact);
-                _glyphMatches.Add(exact);
+                if (learn && verdict == GlyphVerdict.Partial)
+                {
+                    glyphs.Learn(only[0].Name, row.Glyphs, onlyNew: true);
+                }
+                // 用遊戲上的寫法再比對一次，得到和「讀到完全一樣的字」相同的結果（同名的一組也照平常的方式處理）
+                string name = NameMatcher.SortKey(only[0].Name);
+                MatchResult exact = matcher.Match(category, name, row.TextWidth);
+                if (exact.IsMatch && exact.Score >= 1)
+                {
+                    picks[i] = (row, name, exact);
+                    _glyphMatches.Add(exact);
+                }
             }
+            else if (verdict == GlyphVerdict.Partial && (!match.IsMatch || contradicted))
+            {
+                // 推斷（Score 0）：畫面上顯示「推斷，請確認」，預設不勾
+                picks[i] = (row, row.Readings.Count == 0 ? "" : text, new MatchResult(only[0], 0, false, only.Count > 1 ? only : []));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 使用者確認了這一筆（手動指定，或勾選後寫入 Excel）：學這一列裡還不認得的字。
+    /// 一、兩個字的短名稱文字辨識常常讀不出來，永遠沒有「讀對」的機會，靠這個學起來，下次就直接認得。
+    /// </summary>
+    public void Confirm(Found f)
+    {
+        if (glyphs is not null && f.Item is not null && f.Glyphs is not null)
+        {
+            glyphs.Learn(f.Item.Name, f.Glyphs, onlyNew: true);
         }
     }
 
@@ -203,7 +240,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth, row.Glyphs))
                 {
                     added++;
                 }
@@ -221,7 +258,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             }
             else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1),
                          match.IsMatch ? "" : PositionNote(i > 0 ? NameOf(picks[i - 1]) : "", i + 1 < picks.Count ? NameOf(picks[i + 1]) : "", row.TextWidth),
-                         row.TextWidth))
+                         row.TextWidth, row.Glyphs))
             {
                 added++;
             }
@@ -327,7 +364,8 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
     /// width 是量到的字寬（遊戲像素，0 表示沒量到），用來在說明裡寫出名稱有幾個字。
     /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
     /// </summary>
-    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width)
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width,
+        IReadOnlyList<Glyph>? cells = null)
     {
         // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
         string key = confidentAbove != "" || confidentBelow != ""
@@ -343,6 +381,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
             Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow, TextWidth = width,
+            Glyphs = cells,
             PageByValue = _pageSort == SortMode.ByValue,
         };
         _unmatched[key] = found;
@@ -786,7 +825,8 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
     /// 對不到的（找不到、不確定）：note 是位置說明（和讀不出來的一樣，「1 個字，在「A」和「B」之間」），width 是量到的字寬。
     /// </summary>
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
-        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0)
+        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0,
+        IReadOnlyList<Glyph>? cells = null)
     {
         // 手動處理過了：讀得到字的看文字；讀不出來、推斷出來的（沒有文字）看位置
         bool noText = NameMatcher.Normalize(screenText) == "";
@@ -820,6 +860,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard,
                 Above = confidentAbove, Below = confidentBelow, TextWidth = width, PageByValue = _pageSort == SortMode.ByValue,
+                Glyphs = cells,
             };
             _matched[match.Item!] = found;
         }
@@ -836,7 +877,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
                 Above = confidentAbove, Below = confidentBelow, Note = note, TextWidth = width,
-                PageByValue = _pageSort == SortMode.ByValue,
+                PageByValue = _pageSort == SortMode.ByValue, Glyphs = cells,
             };
             _unmatched[key] = found;
         }
@@ -869,6 +910,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         f.Manual = true;
         f.VariantUnsure = false;
         _matched[item] = f;
+        Confirm(f); // 使用者親自指定的：學這一列裡還不認得的字
         Updated?.Invoke(f, true);
         return null;
     }

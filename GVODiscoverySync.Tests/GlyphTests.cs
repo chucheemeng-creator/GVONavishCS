@@ -108,8 +108,12 @@ public class GlyphTests
         Assert.Equal(GlyphVerdict.Partial, store.Check("烏鴉座", crow)); // 只認得「座」，對得上
         Assert.Equal(GlyphVerdict.Mismatch, store.Check("獵戶座", crow)); // 「獵」「戶」對不上
         Assert.Equal(GlyphVerdict.Mismatch, store.Check("織女星", crow)); // 「星」對不上
-        Assert.Equal(GlyphVerdict.Unknown, store.Check("牛郎星雲", crow)); // 字數不同：不能比
-        Assert.Equal(GlyphVerdict.Unknown, store.Check("天津四", crow)); // 一個字都不認得
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("牛郎星雲", crow)); // 字數不同不能逐格比，但畫面上有「座」、名稱裡沒有
+        Assert.Equal(GlyphVerdict.Unknown, store.Check("南十字座", crow)); // 字數不同、名稱裡也有「座」：不能比
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("Sulafat", crow)); // 有英文的名稱也一樣：畫面上有「座」
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("天津四", crow)); // 第三格是認得的「座」，不會是「四」
+        Assert.Equal(GlyphVerdict.Unknown, store.Check("天津四", Cells(client, 1, "天津四"))); // 一個字都不認得，也沒有矛盾
+        Assert.Equal("？？座", store.Read(crow));
         Assert.Equal(GlyphVerdict.Full, store.Check("獵戶座", Cells(client, 5, "獵戶座")));
     }
 
@@ -161,6 +165,110 @@ public class GlyphTests
         Assert.Equal("獵戶座", orion.ScreenText);
         Assert.Equal(1, orion.Match.Score);
         Assert.Empty(session.Unmatched);
+    }
+
+    // 認得「夏季大？角」（不認得「三」）的字形表
+    private static GlyphStore SummerTriangleWithoutThree(Bitmap client)
+    {
+        IReadOnlyList<Glyph> cells = Cells(client, 7, "夏季大三角");
+        GlyphStore store = new();
+        store.Learn("夏季大", [.. cells.Take(3)]);
+        store.Learn("角", [cells[4]]);
+        return store;
+    }
+
+    [Fact]
+    public void 讀不出來_認得的格子只對得上一個名稱_推斷並在確認後學會()
+    {
+        // 實際的情況：「玫」文字辨識永遠讀不對，「？瑰琵鷺」「？瑰湖」一直找不到。
+        // 認得的格子等於已經讀出來了：「夏季大？角」在天文類只對得上「夏季大三角」
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = SummerTriangleWithoutThree(client);
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        List<ListRow> page = [Row(client, 7, "夏季大三角", "")];
+        session.AddPage("天文", page);
+
+        Found f = session.Matched.Values.Single(x => x.Item?.Name == "夏季大三角");
+        Assert.Equal(0, f.Match.Score); // 推斷，請確認（還有不認得的字，不直接當成確定）
+        Assert.True(f.NeedsConfirm);
+        Assert.False(f.ByGlyph);
+        Assert.Equal(4, store.Count); // 還沒學「三」
+
+        session.Confirm(f); // 使用者勾選、寫入 Excel 之後
+        Assert.Equal(5, store.Count);
+        session.AddPage("天文", page); // 下次再讀到：每個字都認得，直接確定
+        Assert.True(f.ByGlyph);
+        Assert.False(f.NeedsConfirm);
+    }
+
+    [Fact]
+    public void 漏讀_模糊比對和字形都指向同一個名稱_確定並學會不認得的字()
+    {
+        // 實際的情況：「南非兀鷲」讀成「南非兀」（86%），字形是「南非兀？」：兩種證據一致，順便學會「鷲」
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = SummerTriangleWithoutThree(client);
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        session.AddPage("天文", [Row(client, 7, "夏季大三角", "夏季大角")]);
+
+        Found f = session.Matched.Values.Single(x => x.Item?.Name == "夏季大三角");
+        Assert.True(f.ByGlyph);
+        Assert.Equal(1, f.Match.Score);
+        Assert.Equal(5, store.Count); // 學會「三」
+    }
+
+    [Fact]
+    public void 模糊比對的結果和字形矛盾時不採用()
+    {
+        // 畫面上是「烏鴉座」，文字辨識讀成「獵戶坐」（模糊比對會對到獵戶座）；但「獵」「戶」的字形對不上
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = new();
+        store.Learn("獵戶座", Cells(client, 5, "獵戶座"));
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        session.AddPage("天文", [Row(client, 6, "烏鴉座", "獵戶坐")]);
+
+        Assert.DoesNotContain(session.Matched.Values, x => x.Item?.Name == "獵戶座");
+    }
+
+    [Fact]
+    public void 手動指定之後學會那一列的字()
+    {
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = new();
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        session.AddPage("天文", [Row(client, 8, "月面", "")]); // 讀不出來
+        Found f = Assert.Single(session.All);
+
+        session.Assign(f, TestBook.Book.Categories["天文"].Single(i => i.Name == "月面"));
+        Assert.Equal(2, store.Count); // 「月」「面」
+        Assert.Equal(GlyphVerdict.Full, store.Check("月面", Cells(client, 8, "月面")));
+    }
+
+    [Fact]
+    public void 實際的一頁_學過一輪之後()
+    {
+        // 使用者把所有分類掃過一輪學到的字形表（1768 個字），和第二輪仍然認不出來的一頁（鳥類）。
+        // 文字辨識：第 3 列讀不出來、第 4 列讀成「琵閆」（找不到）、第 7 列讀成「黑天」（80%）、第 8 列漏了「鸚」
+        using Bitmap client = Screen("birds-rose-spoonbill.png");
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("Glyphs-round1.json"));
+        Assert.Equal(1768, store.Count);
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        (string Name, string Read)[] rows =
+        [
+            ("竹雞", "竹雞"), ("纓翅夜鷹", "纓翅夜鷹"), ("鷺鶴", ""), ("玫瑰琵鷺", "琵閆"), ("穴居貓頭鷹", "穴居貓頭鷹"),
+            ("白令海鸕茲", "白令海鸕茲"), ("黑天鵝", "黑天"), ("彩虹吸蜜鸚鵡", "彩虹吸蜜鵡"), ("胡錦鳥", "胡錦鳥"), ("紅地鳩", "紅地鳩"),
+        ];
+        session.AddPage("鳥類", [.. rows.Select((r, i) => Row(client, i, r.Name, r.Read))]);
+
+        Found Of(string name) => session.Matched.Values.Single(f => f.Item?.Name == name);
+        Assert.True(Of("鷺鶴").ByGlyph); // 兩個字都學過：確定
+        Assert.True(Of("黑天鵝").ByGlyph); // 「黑天？」＋模糊比對也是黑天鵝：確定，學會「鵝」
+        Assert.True(Of("彩虹吸蜜鸚鵡").ByGlyph); // 學會「鸚」「鵡」
+        Assert.Equal(0, Of("玫瑰琵鷺").Match.Score); // 「？瑰琵鷺」只對得上玫瑰琵鷺，但「玫」沒學過、文字辨識也沒讀對：推斷，請確認
+        Assert.Empty(session.Unmatched);
+        Assert.Equal(1771, store.Count); // 鵝、鸚、鵡
+
+        session.Confirm(Of("玫瑰琵鷺")); // 使用者確認之後學會「玫」
+        Assert.Equal(1772, store.Count);
     }
 
     [Fact]
