@@ -172,7 +172,8 @@ public sealed class GlyphStore
     /// 使用者手動指定了這一列是 name（親自選的，是最強的證據）：
     /// 學還不認得的字；認得、但字形不一樣的字，把這一格記成那個字的「另一種字形」——
     /// Excel 和遊戲用的字不一樣時（Excel 寫「阿閦如來」、遊戲上是「阿閦如来」），之後才認得出來。
-    /// 為了避免指定錯了把字形表弄亂：至少要有一個字對得上，而且對不上的字最多一個（名稱很長時最多四分之一）。
+    /// 為了避免指定錯了把字形表弄亂：有對不上的字時，至少要有一個字對得上，而且對不上的字最多一個（名稱很長時最多四分之一）。
+    /// 完全沒有對不上的字時（例如整列都不認得的「蠶」）直接學。
     /// </summary>
     public void LearnPicked(string name, IReadOnlyList<Glyph>? cells)
     {
@@ -203,7 +204,9 @@ public sealed class GlyphStore
                 different.Add(i);
             }
         }
-        if (matched == 0 || different.Count > Math.Max(1, display.Length / 4))
+        // 不認得的字、但那一格是另一個認得的字：也算對不上（照樣學，但要受下面的限制）
+        int conflicts = different.Count + unknown.Count(i => _chars.ContainsKey(cells![i].ToString()));
+        if (conflicts > 0 && (matched == 0 || conflicts > Math.Max(1, display.Length / 4)))
         {
             return;
         }
