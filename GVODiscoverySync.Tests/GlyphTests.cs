@@ -102,7 +102,7 @@ public class GlyphTests
         // 沒有檔案時也認得內建的字；和內建一樣的不存檔，只存這台電腦另外學到的
         string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
         GlyphStore store = GlyphStore.Load(path);
-        Assert.Equal(1806, store.Count);
+        Assert.Equal(1807, store.Count);
         Assert.False(store.Dirty);
 
         using Bitmap client = Screen("astronomy-all-cards.png");
@@ -130,6 +130,62 @@ public class GlyphTests
         // 連續兩次都是同一個新的字形：換
         store.Learn("座", [crow[0]]);
         Assert.Equal(GlyphVerdict.Mismatch, store.Check("獵戶座", orion));
+    }
+
+    [Fact]
+    public void Excel和遊戲用的字不一樣_手動指定之後認得()
+    {
+        // 實際的情況：Excel 寫「阿閦如來」，遊戲上是「阿閦如来」。「來」從別的名稱學過（字形是「來」），
+        // 所以這一列的字形和名稱矛盾，一直是「不確定」；手動指定之後，把這一格記成「來」的另一種字形
+        using Bitmap client = Screen("relics-akshobhya.png");
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("Glyphs-round1.json"), includeBuiltIn: false);
+        List<ListRow> page = [Row(client, 6, "阿閦如來", "阿閦如来")];
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        session.AddPage("宗教遺物", page);
+        Assert.Equal("阿？如？", store.Read(page[0].Glyphs));
+        Found f = Assert.Single(session.All);
+        Assert.Null(f.Item); // 不確定，請手動指定
+
+        session.Assign(f, TestBook.Book.Categories["宗教遺物"].Single(i => i.Name == "阿閦如來"));
+        Assert.Equal(1769, store.Count); // 學會「閦」；「來」多一種字形，字數不變
+        Assert.Equal("阿閦如來", store.Read(page[0].Glyphs));
+        Assert.Equal(GlyphVerdict.Full, store.Check("阿閦如來", page[0].Glyphs));
+
+        // 存檔再讀回來、清除結果後重新讀：直接認得
+        string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
+        try
+        {
+            store.SaveIfDirty(path);
+            DiscoverySession again = new(TestBook.Book, TestBook.Matcher, GlyphStore.Load(path, includeBuiltIn: false));
+            again.AddPage("宗教遺物", page);
+            Found g = again.Matched.Values.Single(x => x.Item?.Name == "阿閦如來");
+            Assert.True(g.ByGlyph);
+            Assert.False(g.NeedsConfirm);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void 手動指定錯了不會把字形表弄亂()
+    {
+        // 把「烏鴉座」那一列指定成「獵戶座」：三個字只有「座」對得上，另外兩個都不一樣，不學
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = new();
+        store.Learn("獵戶座", Cells(client, 5, "獵戶座"));
+        store.LearnPicked("獵戶座", Cells(client, 6, "烏鴉座"));
+        Assert.Equal(GlyphVerdict.Mismatch, store.Check("獵戶座", Cells(client, 6, "烏鴉座")));
+        Assert.Equal(3, store.Count);
+    }
+
+    [Fact]
+    public void 內建的字形表認得阿閦如来()
+    {
+        using Bitmap client = Screen("relics-akshobhya.png");
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("no-such-file.json"));
+        Assert.Equal(GlyphVerdict.Full, store.Check("阿閦如來", Cells(client, 6, "阿閦如來")));
     }
 
     [Fact]
@@ -202,7 +258,7 @@ public class GlyphTests
             Assert.True(f.ByGlyph, name);
             Assert.False(f.NeedsConfirm, name);
         }
-        Assert.Equal(1806, store.Count); // 放大顯示時不學
+        Assert.Equal(1807, store.Count); // 放大顯示時不學
         Assert.False(store.Dirty);
     }
 

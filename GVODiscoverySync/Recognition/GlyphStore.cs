@@ -50,6 +50,15 @@ public sealed class GlyphStore
     // 反過來查：這個字形是哪個字（「·」「‧」「・」在遊戲上是同一個字形，所以可能不只一個）
     private readonly Dictionary<string, HashSet<char>> _chars = [];
 
+    // 同一個字的另一種字形：Excel 和遊戲用的字不一樣時（Excel 寫「阿閦如來」，遊戲上是「阿閦如来」），
+    // 使用者手動指定之後記下來（見 LearnPicked）。比對時主要的字形、另一種字形都算對得上
+    private readonly Dictionary<char, List<Glyph>> _variants = [];
+
+    // 這一格是不是這個字（主要的字形，或另一種字形）
+    private bool IsChar(char c, Glyph cell)
+        => (_glyphs.TryGetValue(c, out Glyph? glyph) && glyph.Matches(cell))
+           || (_variants.TryGetValue(c, out List<Glyph>? others) && others.Exists(o => o.Matches(cell)));
+
     // 已經認得的字，這次看到的字形不一樣：先記著，下次看到的也是這個新的字形才換。
     // 只看到一次就換的話，背景剛好有幾個很亮的點（半透明視窗後面的東西）就會把正確的字形換成壞的
     private readonly Dictionary<char, Glyph> _pending = [];
@@ -96,9 +105,9 @@ public sealed class GlyphStore
                 continue;
             }
             char c = display[i];
-            if (_glyphs.TryGetValue(c, out Glyph? old))
+            if (_glyphs.ContainsKey(c))
             {
-                if (old.Matches(cell))
+                if (IsChar(c, cell))
                 {
                     _pending.Remove(c); // 和認得的一樣：之前那一次不一樣的不算數
                     continue;
@@ -130,6 +139,11 @@ public sealed class GlyphStore
             }
         }
         _glyphs[c] = glyph;
+        AddReverse(c, glyph);
+    }
+
+    private void AddReverse(char c, Glyph glyph)
+    {
         string key = glyph.ToString();
         if (!_chars.TryGetValue(key, out HashSet<char>? chars))
         {
@@ -137,6 +151,72 @@ public sealed class GlyphStore
             _chars[key] = chars;
         }
         chars.Add(c);
+    }
+
+    private void AddVariant(char c, Glyph glyph)
+    {
+        if (IsChar(c, glyph))
+        {
+            return;
+        }
+        if (!_variants.TryGetValue(c, out List<Glyph>? others))
+        {
+            others = [];
+            _variants[c] = others;
+        }
+        others.Add(glyph);
+        AddReverse(c, glyph);
+    }
+
+    /// <summary>
+    /// 使用者手動指定了這一列是 name（親自選的，是最強的證據）：
+    /// 學還不認得的字；認得、但字形不一樣的字，把這一格記成那個字的「另一種字形」——
+    /// Excel 和遊戲用的字不一樣時（Excel 寫「阿閦如來」、遊戲上是「阿閦如来」），之後才認得出來。
+    /// 為了避免指定錯了把字形表弄亂：至少要有一個字對得上，而且對不上的字最多一個（名稱很長時最多四分之一）。
+    /// </summary>
+    public void LearnPicked(string name, IReadOnlyList<Glyph>? cells)
+    {
+        if (!Comparable(name, cells))
+        {
+            return;
+        }
+        string display = NameMatcher.SortKey(name).Trim();
+        int matched = 0;
+        List<int> different = [], unknown = [];
+        for (int i = 0; i < display.Length; i++)
+        {
+            Glyph cell = cells![i];
+            if (cell.IsEmpty)
+            {
+                continue; // 空的、或放大顯示時認不出來的格子：不學
+            }
+            if (!_glyphs.ContainsKey(display[i]))
+            {
+                unknown.Add(i);
+            }
+            else if (IsChar(display[i], cell))
+            {
+                matched++;
+            }
+            else
+            {
+                different.Add(i);
+            }
+        }
+        if (matched == 0 || different.Count > Math.Max(1, display.Length / 4))
+        {
+            return;
+        }
+        foreach (int i in unknown)
+        {
+            Set(display[i], cells![i]);
+            Dirty = true;
+        }
+        foreach (int i in different)
+        {
+            AddVariant(display[i], cells![i]);
+            Dirty = true;
+        }
     }
 
     /// <summary>
@@ -164,9 +244,9 @@ public sealed class GlyphStore
             {
                 continue; // 這一格認不出來（放大顯示時）：不算對得上，也不算矛盾
             }
-            if (_glyphs.TryGetValue(display[i], out Glyph? glyph))
+            if (_glyphs.ContainsKey(display[i]))
             {
-                if (!glyph.Matches(cells![i]))
+                if (!IsChar(display[i], cells![i]))
                 {
                     return GlyphVerdict.Mismatch;
                 }
@@ -193,7 +273,7 @@ public sealed class GlyphStore
         Glyph? best = null;
         int bestDistance = int.MaxValue, second = int.MaxValue;
         string bestKey = "";
-        foreach (Glyph glyph in _glyphs.Values)
+        foreach (Glyph glyph in _glyphs.Values.Concat(_variants.Values.SelectMany(v => v)))
         {
             int distance = glyph.Distance(raw);
             if (distance < bestDistance)
@@ -261,21 +341,35 @@ public sealed class GlyphStore
         return store;
     }
 
+    // 檔案的格式：每個字一行，"字": "字形"；有另一種字形時用「|」接在後面（"來": "主要的字形|另一種字形"）
     private void Add(string json, bool builtIn)
     {
         Dictionary<string, string>? saved = JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions);
         foreach ((string key, string value) in saved ?? [])
         {
-            if (key.Length == 1 && Glyph.Parse(value) is Glyph glyph)
+            string[] parts = (value ?? "").Split('|');
+            if (key.Length != 1 || Glyph.Parse(parts[0]) is not Glyph glyph)
             {
-                Set(key[0], glyph);
-                if (builtIn)
+                continue;
+            }
+            Set(key[0], glyph);
+            foreach (string part in parts.Skip(1))
+            {
+                if (Glyph.Parse(part) is Glyph other)
                 {
-                    _builtIn[key[0]] = glyph.ToString();
+                    AddVariant(key[0], other);
                 }
+            }
+            if (builtIn)
+            {
+                _builtIn[key[0]] = Saved(key[0]);
             }
         }
     }
+
+    // 這個字存檔的內容（主要的字形，加上另一種字形）
+    private string Saved(char c)
+        => string.Join('|', new[] { _glyphs[c] }.Concat(_variants.TryGetValue(c, out List<Glyph>? others) ? others : []));
 
     /// <summary>
     /// 有學到新的字形才存檔（只存內建沒有、或和內建不同的字）。存不了（例如唯讀資料夾）就算了，這次執行照樣能用。
@@ -289,8 +383,8 @@ public sealed class GlyphStore
         try
         {
             Dictionary<string, string> saved = _glyphs.OrderBy(p => p.Key)
-                .Where(p => !_builtIn.TryGetValue(p.Key, out string? builtIn) || builtIn != p.Value.ToString())
-                .ToDictionary(p => p.Key.ToString(), p => p.Value.ToString());
+                .Where(p => !_builtIn.TryGetValue(p.Key, out string? builtIn) || builtIn != Saved(p.Key))
+                .ToDictionary(p => p.Key.ToString(), p => Saved(p.Key));
             AtomicFile.WriteAllText(path ?? DefaultPath, JsonSerializer.Serialize(saved, JsonOptions));
             Dirty = false;
         }

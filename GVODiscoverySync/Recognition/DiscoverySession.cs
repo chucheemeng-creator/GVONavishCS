@@ -928,7 +928,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         f.Manual = true;
         f.VariantUnsure = false;
         _matched[item] = f;
-        Confirm(f); // 使用者親自指定的：學這一列裡還不認得的字
+        // 使用者親自指定的：學這一列裡還不認得的字；字形不一樣的字記成另一種字形（Excel 和遊戲用的字不同時）
+        if (glyphs is not null && f.Glyphs is not null)
+        {
+            glyphs.LearnPicked(item.Name, f.Glyphs);
+        }
         Updated?.Invoke(f, true);
         return null;
     }
