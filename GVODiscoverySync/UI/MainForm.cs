@@ -1129,7 +1129,7 @@ public sealed partial class MainForm : Form
             try
             {
                 using Bitmap bmp = new(path);
-                Match m = MyRegex().Match(Path.GetFileNameWithoutExtension(path));
+                Match m = ScaleSuffixRegex().Match(Path.GetFileNameWithoutExtension(path));
                 double scale = m.Success
                     ? double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)
                     : Math.Max(1, bmp.Width / 800.0);
@@ -1279,6 +1279,7 @@ public sealed partial class MainForm : Form
         base.Dispose(disposing);
     }
 
+    // 存下的遊戲畫面檔名結尾的顯示縮放（例如 discovery-20261114-083850-s1.5 的「1.5」）
     [GeneratedRegex(@"-s(\d+(?:\.\d+)?)$")]
-    private static partial Regex MyRegex();
+    private static partial Regex ScaleSuffixRegex();
 }
