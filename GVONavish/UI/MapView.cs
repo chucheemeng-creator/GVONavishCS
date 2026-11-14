@@ -29,20 +29,12 @@ public enum ScreenCorner
 }
 
 /// <summary>雙擊地圖的資訊。</summary>
-public class MapClickEventArgs : EventArgs
+public class MapClickEventArgs(WorldPoint world, Keys modifiers, bool onShip, bool onMarker) : EventArgs
 {
-    public WorldPoint World { get; }
-    public Keys Modifiers { get; }
-    public bool OnShip { get; }
-    public bool OnMarker { get; }
-
-    public MapClickEventArgs(WorldPoint world, Keys modifiers, bool onShip, bool onMarker)
-    {
-        World = world;
-        Modifiers = modifiers;
-        OnShip = onShip;
-        OnMarker = onMarker;
-    }
+    public WorldPoint World { get; } = world;
+    public Keys Modifiers { get; } = modifiers;
+    public bool OnShip { get; } = onShip;
+    public bool OnMarker { get; } = onMarker;
 }
 
 // 外部可以設定的公開屬性（有 public set）都標了 [DesignerSerializationVisibility(Hidden)]：
@@ -397,24 +389,14 @@ public class MapView : Control
     }
 
     /// <summary>世界座標 → 畫面座標的換算資料。</summary>
-    private readonly struct ViewTransform
+    private readonly struct ViewTransform(double left, double top, double mapWidth, double kx, double ky, int viewWidth)
     {
-        public readonly double Left;     // 第一張地圖的左邊（畫面座標，≤ 0）
-        public readonly double Top;
-        public readonly double MapWidth; // 一整張地圖在畫面上的寬度
-        public readonly double Kx;       // 一個世界座標 = 幾個畫面像素
-        public readonly double Ky;
-        public readonly int ViewWidth;
-
-        public ViewTransform(double left, double top, double mapWidth, double kx, double ky, int viewWidth)
-        {
-            Left = left;
-            Top = top;
-            MapWidth = mapWidth;
-            Kx = kx;
-            Ky = ky;
-            ViewWidth = viewWidth;
-        }
+        public readonly double Left = left;     // 第一張地圖的左邊（畫面座標，≤ 0）
+        public readonly double Top = top;
+        public readonly double MapWidth = mapWidth; // 一整張地圖在畫面上的寬度
+        public readonly double Kx = kx;       // 一個世界座標 = 幾個畫面像素
+        public readonly double Ky = ky;
+        public readonly int ViewWidth = viewWidth;
     }
 
     // 線寬：100% 以下是 1 像素，放大時跟著變粗（和原版相同）
@@ -683,7 +665,8 @@ public class MapView : Control
 
     private void DrawSpeed(Graphics g)
     {
-        string text = $"{SpeedKnots!.Value:0.00} kt";
+        // 小數一位：座標是整數，算出來的船速有 ±0.1 節左右的誤差，顯示到小數兩位只會看到末位一直跳
+        string text = $"{SpeedKnots!.Value:0.0} kt";
         if (HeadingDegrees.HasValue)
         {
             text += $"　航向 {HeadingDegrees.Value:0}°";
