@@ -1,9 +1,14 @@
 # 發佈新版：在 Actions 頁面選「發佈新版」→ Run workflow → 選要發佈的程式。
-# 1. 從 .csproj 讀版本號（發佈前先改好 <Version>，合併到 master）
-# 2. 跑全部的測試，沒過就不發佈
-# 3. 用平常的設定發佈：win-x64、不含 .NET 執行環境（framework-dependent）、單一檔案、不用 ReadyToRun
-# 4. 壓成 zip，建立「草稿」Release（標籤、標題、zip 都放好）
-# 之後到 Releases 頁面打開草稿，貼上說明、檢查無誤再按 Publish。草稿在 Publish 之前別人看不到，標籤也還不會建立。
+# 發佈前先改好兩個地方、一起合併到 master：
+#   - <程式>/<程式>.csproj 的 <Version>
+#   - <程式>/ReleaseNotes.md：這一版的說明，裡面的 <!-- version: … --> 要和 <Version> 一樣
+# 執行時：
+# 1. 從 .csproj 讀版本號；同一個版本已經有 Release 時停下來
+# 2. 檢查 ReleaseNotes.md 的版本號（忘了改說明時停下來，免得發出上一版的說明）
+# 3. 跑全部的測試，沒過就不發佈
+# 4. 用平常的設定發佈：win-x64、不含 .NET 執行環境（framework-dependent）、單一檔案、不用 ReadyToRun
+# 5. 壓成 zip，直接發佈 Release（標籤、標題、說明、zip；發現物同步標成 Pre-release）
+# 想先看過再發佈：勾「只建立草稿」，之後到 Releases 頁面檢查、按 Publish。
 name: 發佈新版
 
 on:
@@ -16,6 +21,10 @@ on:
           - GVODiscoverySync
           - GVONavish
         default: GVODiscoverySync
+      draft:
+        description: 只建立草稿（之後自己到 Releases 頁面按 Publish）
+        type: boolean
+        default: false
 
 permissions:
   contents: write # 建立 Release 要用
@@ -53,6 +62,17 @@ jobs:
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) { throw "$tag 已經有 Release（或草稿）了，請先把 $project.csproj 的 <Version> 改成新版本號" }
           $global:LASTEXITCODE = 0
+
+          # 這一版的說明：ReleaseNotes.md 的版本號要和 .csproj 一樣；拿掉開頭的註解（說明、版本號）
+          $notesPath = "$project/ReleaseNotes.md"
+          if (-not (Test-Path $notesPath)) { throw "找不到 $notesPath（這一版的說明）" }
+          $notes = Get-Content $notesPath -Raw -Encoding UTF8
+          if ($notes -notmatch '<!--\s*version:\s*([^\s]+)\s*-->') { throw "$notesPath 裡找不到 <!-- version: … -->" }
+          if ($Matches[1] -ne $version) {
+            throw "$notesPath 的版本號是 $($Matches[1])，$project.csproj 是 $version：請先把這一版的說明寫好（並改版本號）"
+          }
+          $body = ($notes -replace '(?s)^\s*(<!--.*?-->\s*)+', '').Trim()
+          Set-Content release-notes.md $body -Encoding UTF8
           "project=$project" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
@@ -81,17 +101,17 @@ jobs:
           $files | ForEach-Object { Write-Host "  $($_.Name)  $([math]::Round($_.Length / 1KB)) KB" }
           Compress-Archive -Path $files.FullName -DestinationPath '${{ steps.info.outputs.zip }}'
 
-      - name: 建立草稿 Release
+      - name: 發佈 Release
         shell: pwsh
         run: |
           $ghArgs = @(
             'release', 'create', '${{ steps.info.outputs.tag }}', '${{ steps.info.outputs.zip }}',
-            '--draft',
             '--target', '${{ github.sha }}',
             '--title', '${{ steps.info.outputs.title }}',
-            '--notes', '（請在這裡貼上這一版的說明，檢查無誤後按 Publish）'
+            '--notes-file', 'release-notes.md'
           )
           if ('${{ steps.info.outputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+          if ('${{ inputs.draft }}' -eq 'true') { $ghArgs += '--draft' }
           gh @ghArgs
         env:
           GH_TOKEN: ${{ github.token }}

@@ -171,6 +171,30 @@ public sealed class NameMatcher
     }
 
     /// <summary>
+    /// 這一頁讀到的每一列是不是都和 Excel 的名稱完全一樣（而且字數對得上）。title 是讀到的分類標題（"" 時從清單內容推測分類）。
+    /// 是的話回傳 null；不是的話回傳原因（除錯輸出用）。
+    /// 只看「完全一樣」，不看模糊比對的結果：模糊對到的，換個倍率可能讀得更完整，還是要讀。
+    /// </summary>
+    public string? WhyNotAllExact(string title, IReadOnlyList<(string Text, double Width)> rows)
+    {
+        string? category = MatchCategory(title) ?? GuessCategory([.. rows.Select(r => r.Text)]);
+        if (category is null)
+        {
+            return "看不出分類";
+        }
+        foreach ((string text, double width) in rows)
+        {
+            MatchResult m = Match(category, text, width);
+            if (m is not { IsMatch: true, Score: >= 1 })
+            {
+                return $"「{text}」在「{category}」裡沒有完全一樣的名稱" +
+                       (m.Item is null ? "" : $"（最像的是 {m.Item.Name}，{m.Score:0%}{(m.Ambiguous ? "，不確定" : "")}）");
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// 換成新的錯字對照表（讀到的 → 正確的）。對應到自己的（不想用某一組內建的）不列入。
     /// 依「讀到的」由長到短排：「冫每」要比「每」先換（見 ApplyConfusions）。
     /// </summary>
@@ -437,6 +461,13 @@ public sealed class NameMatcher
         }
     }
 
+    // 這個字在遊戲上確定是一個中文字寬（英數字、括號等符號不確定）
+    private static bool IsFullWidth(char c)
+        => c is '·' or '・' or '‧' || !(c < 0x80 || (c >= '\uFF00' && c <= '\uFFEF') || !char.IsLetter(c));
+
+    /// <summary>名稱的每個字在遊戲上都確定是一個中文字寬（可以一格一格切開比對字形）。</summary>
+    public static bool IsFullWidthName(string name) => name.Length > 0 && name.All(IsFullWidth);
+
     // 名稱的寬度範圍（半形字的單位，中文字算 2）。
     // 間隔號不管 Excel 寫成 ·、・、‧ 哪一種，遊戲上都是一個中文字寬（實測「埃努瑪·埃里什」是 7 個字寬），算 2。
     // 英數字、括號等其他符號，Excel 和遊戲的全形／半形不一定一樣
@@ -447,8 +478,7 @@ public sealed class NameMatcher
         int min = 0, max = 0;
         foreach (char c in name.Trim())
         {
-            bool unsure = c is not ('·' or '・' or '‧')
-                          && (c < 0x80 || (c >= '\uFF00' && c <= '\uFFEF') || !char.IsLetter(c));
+            bool unsure = !IsFullWidth(c);
             min += unsure ? 1 : 2;
             max += 2;
         }

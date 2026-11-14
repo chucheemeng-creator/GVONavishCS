@@ -18,8 +18,14 @@ public enum SortMode { Unknown, ByValue, ByName }
 /// <summary>加入一頁的結果：新出現幾筆、這一頁的排序、這個分類目前對到幾個／Excel 裡共幾個。</summary>
 public sealed record PageResult(int Added, SortMode PageSort, int Listed, int Total);
 
-public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
+public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, GlyphStore? glyphs = null)
 {
+    /// <summary>學過的字形（比對文字辨識讀不出來、讀錯的列）；沒給就不比對字形。</summary>
+    public GlyphStore? Glyphs => glyphs;
+
+    // 這一頁用字形認出來的列（Analyze 填，AddPage 用來在結果上做記號）
+    private readonly List<MatchResult> _glyphMatches = [];
+
     /// <summary>新加了一筆（畫面要加一列）。</summary>
     public Action<Found>? Added { get; set; }
 
@@ -66,7 +72,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     // 同名的一組 → 使用者移除的「沒有身分」的筆數（沒有鄰居的列，補的時候要算進去）
     private readonly Dictionary<DiscoveryItem, int> _anonymousRemoved = [];
     // 同名組的一列（AddVariants 用）
-    private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence);
+    private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence, bool ByGlyph);
 
     /// <summary>全部清掉（重新開始讀）。排序方式也重新判斷（使用者可能已經按 ⇅ 換了排序）。</summary>
     public void Clear()
@@ -96,11 +102,121 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             (string text, MatchResult match) = PickBestReading(category, row);
             picks.Add((row, text, match));
         }
+        ApplyGlyphs(category, picks, remember);
         // 這一頁是怎麼排序的（依名稱、依價值、看不出來）；用來推斷不確定的列和同名的發現物
         SortMode mode = DetectSort(picks, remember);
         ResolveWithinPage(category, picks, mode);
         return picks;
     }
+
+    /// <summary>
+    /// 比對字形：先從這一頁「讀到的字和 Excel 完全一樣」的列學字形（learn），再看其他的列（讀不出來、讀錯、不確定）。
+    /// 認得的格子等於已經讀出來了（例如「南非兀？」），這個分類裡字數相同、和這些格子不矛盾的名稱只剩一個時：
+    ///   - 每個字都認得：確定是它（字形是逐點比對的，比模糊比對可靠，所以也會蓋過模糊比對的結果）
+    ///   - 還有不認得的字，但文字辨識的模糊比對也指向它：兩種證據一致，確定是它，順便學會不認得的字
+    ///   - 還有不認得的字，文字辨識又沒讀出來：推斷是它，請使用者確認（確認、寫入後才學）
+    /// 模糊比對對到的名稱如果和字形矛盾，那個結果不採用。
+    /// </summary>
+    private void ApplyGlyphs(string category, List<(ListRow Row, string Text, MatchResult Match)> picks, bool learn)
+    {
+        _glyphMatches.Clear();
+        if (glyphs is null)
+        {
+            return;
+        }
+        if (learn)
+        {
+            foreach ((ListRow row, _, MatchResult match) in picks)
+            {
+                if (match.IsMatch && match.Score >= 1 && row.GlyphsExact)
+                {
+                    glyphs.Learn(match.Item!.Name, row.Glyphs);
+                }
+            }
+        }
+        if (glyphs.Count == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < picks.Count; i++)
+        {
+            (ListRow row, string text, MatchResult match) = picks[i];
+            if (row.Glyphs is null || (match.IsMatch && match.Score >= 1))
+            {
+                continue;
+            }
+            if (!row.GlyphsExact)
+            {
+                // 放大顯示：字形是「最像的已知字形」，不是逐點精確的。只在整列每個字都對得上、而且只有一個名稱這樣時採用，
+                // 不用來排除別的名稱、不推斷、不學
+                List<IReadOnlyList<DiscoveryItem>> full = [.. matcher.Between(category, null, null)
+                    .Where(g => glyphs.Check(g[0].Name, row.Glyphs) == GlyphVerdict.Full)];
+                if (full.Count == 1)
+                {
+                    string display = NameMatcher.SortKey(full[0][0].Name);
+                    MatchResult result = matcher.Match(category, display, row.TextWidth);
+                    if (result.IsMatch && result.Score >= 1)
+                    {
+                        picks[i] = (row, display, result);
+                        _glyphMatches.Add(result);
+                    }
+                }
+                continue;
+            }
+            // 字數對得上、字形不矛盾的名稱（有括號、英數字的名稱不能比對字形，只要字數可能對得上就算一個）
+            List<IReadOnlyList<DiscoveryItem>> possible = [.. matcher.Between(category, null, null)
+                .Where(g => NameMatcher.FitsWidth(g, row.TextWidth) && !GlyphMismatch(g, row))];
+            // 模糊比對對到的名稱和字形矛盾（認得的字對不上）：那個結果一定是錯的
+            bool contradicted = match.IsMatch && GlyphMismatch(match.IsVariant ? match.Variants : [match.Item!], row);
+            if (possible.Count != 1)
+            {
+                if (contradicted)
+                {
+                    picks[i] = (row, text, new MatchResult(match.Item, match.Score, true, match.Variants)); // 改成不確定
+                }
+                continue;
+            }
+            IReadOnlyList<DiscoveryItem> only = possible[0];
+            GlyphVerdict verdict = glyphs.Check(only[0].Name, row.Glyphs);
+            bool ocrAgrees = match.IsMatch && match.Score > 0 && only.Contains(match.Item!);
+            if (verdict == GlyphVerdict.Full || (verdict == GlyphVerdict.Partial && ocrAgrees))
+            {
+                if (learn && verdict == GlyphVerdict.Partial)
+                {
+                    glyphs.Learn(only[0].Name, row.Glyphs, onlyNew: true);
+                }
+                // 用遊戲上的寫法再比對一次，得到和「讀到完全一樣的字」相同的結果（同名的一組也照平常的方式處理）
+                string name = NameMatcher.SortKey(only[0].Name);
+                MatchResult exact = matcher.Match(category, name, row.TextWidth);
+                if (exact.IsMatch && exact.Score >= 1)
+                {
+                    picks[i] = (row, name, exact);
+                    _glyphMatches.Add(exact);
+                }
+            }
+            else if (verdict == GlyphVerdict.Partial && (!match.IsMatch || contradicted))
+            {
+                // 推斷（Score 0）：畫面上顯示「推斷，請確認」，預設不勾
+                picks[i] = (row, row.Readings.Count == 0 ? "" : text, new MatchResult(only[0], 0, false, only.Count > 1 ? only : []));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 使用者確認了這一筆（手動指定，或勾選後寫入 Excel）：學這一列裡還不認得的字。
+    /// 一、兩個字的短名稱文字辨識常常讀不出來，永遠沒有「讀對」的機會，靠這個學起來，下次就直接認得。
+    /// </summary>
+    public void Confirm(Found f)
+    {
+        if (glyphs is not null && f.Item is not null && f.Glyphs is not null)
+        {
+            glyphs.Learn(f.Item.Name, f.Glyphs, onlyNew: true);
+        }
+    }
+
+    // 這一列的字形和這個名稱（同名的一組）對不上：認得的字裡有不一樣的
+    private bool GlyphMismatch(IReadOnlyList<DiscoveryItem> group, ListRow row)
+        => glyphs is not null && row.GlyphsExact && glyphs.Check(group[0].Name, row.Glyphs) == GlyphVerdict.Mismatch;
 
     /// <summary>
     /// 讀到的一頁：每一列挑最像的讀法、判斷排序、同一頁推斷，然後加進結果（新的一筆用 Added 通知畫面）。
@@ -118,6 +234,10 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            // 記在這一筆上、之後確認時用來學字形的格子：放大顯示時的字形是「最像的已知字形」，不是精確的，不能拿來學
+            IReadOnlyList<Glyph>? learnable = row.GlyphsExact ? row.Glyphs : null;
+            // 這一列是用字形認出來的（同名的一組每一列各自記，不共用同一個比對結果）
+            bool byGlyph = _glyphMatches.Exists(m => ReferenceEquals(m, match));
             Occurrence? occurrence = null;
             if (match.IsMatch && match.IsVariant)
             {
@@ -131,7 +251,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             }
             if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
             {
-                if (AddVariantExact(category, text, row.HasCard, match, exact, occurrence))
+                if (AddVariantExact(category, text, row.HasCard, match, exact, occurrence, byGlyph))
                 {
                     added++;
                 }
@@ -142,7 +262,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth, learnable))
                 {
                     added++;
                 }
@@ -156,11 +276,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     group = (match, new List<VariantRow>());
                     variantRows[first] = group;
                 }
-                group.Rows.Add(new VariantRow(text, row.HasCard, occurrence));
+                group.Rows.Add(new VariantRow(text, row.HasCard, occurrence, byGlyph));
             }
             else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1),
                          match.IsMatch ? "" : PositionNote(i > 0 ? NameOf(picks[i - 1]) : "", i + 1 < picks.Count ? NameOf(picks[i + 1]) : "", row.TextWidth),
-                         row.TextWidth))
+                         row.TextWidth, learnable))
             {
                 added++;
             }
@@ -170,6 +290,15 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             added += AddVariants(category, match, rows);
         }
         RemoveStale(category, picks);
+        // 這一頁用字形認出來、這次加進來（或從「推斷」換成這個結果）的幾筆：做記號，畫面上顯示「字形比對」
+        foreach (Found f in _matched.Values)
+        {
+            if (!f.ByGlyph && !f.Manual && !f.Match.IsVariant && _glyphMatches.Exists(m => ReferenceEquals(m, f.Match)))
+            {
+                f.ByGlyph = true;
+                Updated?.Invoke(f, false);
+            }
+        }
         int listed = _matched.Values.Count(f => f.Category == category);
         int total = book.Categories.TryGetValue(category, out List<DiscoveryItem>? items) ? items.Count : 0;
         return new PageResult(added, _pageSort, listed, total);
@@ -257,7 +386,8 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// width 是量到的字寬（遊戲像素，0 表示沒量到），用來在說明裡寫出名稱有幾個字。
     /// 同一個位置已經有了（捲到頁面邊緣時只剩一邊的鄰居，也算同一個位置）就回傳 false。
     /// </summary>
-    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width)
+    private bool AddUnreadable(string category, string above, string below, string confidentAbove, string confidentBelow, double width,
+        IReadOnlyList<Glyph>? cells = null)
     {
         // 索引鍵用已確定的鄰居（同名組的列不算，免得夾在同名列旁邊的兩筆撞在一起）；兩邊都沒有時才用顯示用的名稱
         string key = confidentAbove != "" || confidentBelow != ""
@@ -273,6 +403,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         {
             Category = category, ScreenText = "（讀不出來）", Match = MatchResult.None(0),
             Unreadable = true, Note = note, UnmatchedKey = key, Above = confidentAbove, Below = confidentBelow, TextWidth = width,
+            Glyphs = cells,
             PageByValue = _pageSort == SortMode.ByValue,
         };
         _unmatched[key] = found;
@@ -358,6 +489,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                         List<IReadOnlyList<DiscoveryItem>> between = [.. matcher.Between(category, lower, upper)
                             .Where(g => !(g.Count == 1 && claimed.Contains(g[0])))
                             .Where(g => NameMatcher.FitsWidth(g, row.TextWidth))
+                            .Where(g => !GlyphMismatch(g, row)) // 認得的字對不上的不是它
                             .Where(fitsMerit)];
                         if (between.Count == 1)
                         {
@@ -389,6 +521,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     .Where(c => lower is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), lower) >= 0)
                     .Where(c => upper is null || string.CompareOrdinal(NameMatcher.SortKey(c.Items[0].Name), upper) <= 0)
                     .Where(c => fitsMerit(c.Items))
+                    .Where(c => !GlyphMismatch(c.Items, row))
                     .OrderByDescending(c => c.Score)];
                 if (candidates.Count == 0 || (candidates.Count > 1 && candidates[0].Score - candidates[1].Score < NameMatcher.MinLead))
                 {
@@ -539,7 +672,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
 
     /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
     private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item,
-        Occurrence? occurrence)
+        Occurrence? occurrence, bool byGlyph = false)
     {
         // 這一列（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它，什麼都不動。
         // 要放在最前面：否則下面會先把佔住這個發現物的那一筆挪走，然後才發現不用加
@@ -613,7 +746,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         Found found = new()
         {
             Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item, Occurrence = occurrence,
-            ByMerit = true,
+            ByMerit = true, ByGlyph = byGlyph,
         };
         _matched[item] = found;
         Added?.Invoke(found);
@@ -687,7 +820,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             Found found = new()
             {
                 Category = category, ScreenText = row.Text, Match = match, HasCard = row.HasCard,
-                Assigned = item, VariantUnsure = !complete, Occurrence = row.Occurrence,
+                Assigned = item, VariantUnsure = !complete, Occurrence = row.Occurrence, ByGlyph = row.ByGlyph,
             };
             _matched[item] = found;
             Added?.Invoke(found);
@@ -714,7 +847,8 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
     /// 對不到的（找不到、不確定）：note 是位置說明（和讀不出來的一樣，「1 個字，在「A」和「B」之間」），width 是量到的字寬。
     /// </summary>
     private bool AddResult(string category, string screenText, bool hasCard, MatchResult match,
-        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0)
+        string confidentAbove = "", string confidentBelow = "", string note = "", double width = 0,
+        IReadOnlyList<Glyph>? cells = null)
     {
         // 手動處理過了：讀得到字的看文字；讀不出來、推斷出來的（沒有文字）看位置
         bool noText = NameMatcher.Normalize(screenText) == "";
@@ -733,6 +867,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
                     // 之前讀不出來、推斷出來的，這次讀到字了：換成讀到的結果（預設打勾）
                     existing.ScreenText = screenText;
                     existing.Match = match;
+                    existing.Glyphs ??= cells;
                     existing.HasCard |= hasCard;
                     Updated?.Invoke(existing, true);
                 }
@@ -748,6 +883,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard,
                 Above = confidentAbove, Below = confidentBelow, TextWidth = width, PageByValue = _pageSort == SortMode.ByValue,
+                Glyphs = cells,
             };
             _matched[match.Item!] = found;
         }
@@ -764,7 +900,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
             {
                 Category = category, ScreenText = screenText, Match = match, HasCard = hasCard, UnmatchedKey = key,
                 Above = confidentAbove, Below = confidentBelow, Note = note, TextWidth = width,
-                PageByValue = _pageSort == SortMode.ByValue,
+                PageByValue = _pageSort == SortMode.ByValue, Glyphs = cells,
             };
             _unmatched[key] = found;
         }
@@ -797,6 +933,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher)
         f.Manual = true;
         f.VariantUnsure = false;
         _matched[item] = f;
+        // 使用者親自指定的：學這一列裡還不認得的字；字形不一樣的字記成另一種字形（Excel 和遊戲用的字不同時）
+        if (glyphs is not null && f.Glyphs is not null)
+        {
+            glyphs.LearnPicked(item.Name, f.Glyphs);
+        }
         Updated?.Invoke(f, true);
         return null;
     }

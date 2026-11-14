@@ -39,6 +39,9 @@ public sealed class MainForm : Form
 
     // 名稱對照表（Excel 的寫法 → 遊戲上的寫法；獨立的檔案，程式開著也可以改）
     private readonly MappingFile _nameAliases;
+
+    // 學過的字形（比對文字辨識讀不出來、讀錯的列；存在 GVODiscoverySync.Glyphs.json，越用認得的字越多）
+    private readonly GlyphStore _glyphs = GlyphStore.Load();
     private readonly string? _nameAliasProblem;
     private readonly GameWindow _window = new();
     private readonly DiscoveryListReader? _reader;
@@ -96,6 +99,11 @@ public sealed class MainForm : Form
             settings.Save();
         }
         _reader = DiscoveryListReader.TryCreate(settings.Layout);
+        if (_reader is not null)
+        {
+            _reader.SnapGlyph = _glyphs.Snap; // 放大顯示時，把糊掉的字形換成最像的已知字形
+            _reader.GlyphText = _glyphs.ReadExact; // 每個字都認得的頁面直接用字形讀，不做文字辨識
+        }
         if (_reader is not null)
         {
             _reader.OcrScale = settings.OcrScale;
@@ -315,7 +323,7 @@ public sealed class MainForm : Form
             DiscoveryBook book = DiscoveryBook.Load(path);
             _book = book;
             _matcher = new NameMatcher(book, _confusions.Map);
-            _session = new DiscoverySession(book, _matcher)
+            _session = new DiscoverySession(book, _matcher, _glyphs)
             {
                 Added = OnFoundAdded,
                 Updated = UpdateRow,
@@ -424,6 +432,15 @@ public sealed class MainForm : Form
             {
                 Cursor = Cursors.WaitCursor;
                 WriteResult result = _book.WriteMarks(character, items);
+                // 寫入的都是使用者勾選、確認過的：學這些列裡還不認得的字（「推斷，請確認」的短名稱靠這個學起來）
+                foreach (Found f in _session?.All ?? [])
+                {
+                    if (f.Item is not null && result.Written.Contains(f.Item))
+                    {
+                        _session!.Confirm(f);
+                    }
+                }
+                _glyphs.SaveIfDirty();
                 RefreshAllRows();
                 UpdateSummary();
                 string message = $"已寫入 {result.Written.Count} 筆。\n\n原檔備份為：\nbackup\\{Path.GetFileName(result.BackupPath)}";
@@ -617,7 +634,7 @@ public sealed class MainForm : Form
         if (category is null)
         {
             category = _matcher.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);
-            how = "（分類由清單內容判斷）";
+            how = snapshot.ByGlyphs ? "（用字形讀取）" : "（分類由清單內容判斷）";
         }
         if (category is null)
         {
@@ -641,9 +658,14 @@ public sealed class MainForm : Form
                 SortMode.ByName => "依名稱排列",
                 _ => "排序看不出來",
             };
+            // 放大顯示時提醒一下比對字形的限制（詳見 README「筆電、放大顯示的電腦」）
+            string scaleNote = Math.Abs(scale - 1) <= 0.001 ? ""
+                : scale >= 1.45 ? $"〔顯示縮放 {scale:0%}：字形只認不學〕"
+                : $"〔顯示縮放 {scale:0%}：不比對字形〕";
             SetStatus($"{category}{how}（{sortText}）：這一頁讀到 {snapshot.Rows.Count} 筆，新出現 {page.Added} 筆。" +
-                      $"這個分類目前對到 {page.Listed}／{page.Total} 個。");
+                      $"這個分類目前對到 {page.Listed}／{page.Total} 個。{scaleNote}");
             UpdateSummary();
+            _glyphs.SaveIfDirty(); // 這一頁學到新的字形就存起來
         }
         finally
         {
@@ -676,14 +698,7 @@ public sealed class MainForm : Form
     // 第一個倍率讀到的清單是不是每一列都和 Excel 的名稱完全一樣（而且字數對得上）：是的話不用再換倍率讀。
     // 只看「完全一樣」，不看模糊比對的結果：模糊對到的，換個倍率可能讀得更完整，還是要讀
     private bool AllExact(string title, IReadOnlyList<(string Text, double Width)> rows)
-    {
-        if (_matcher is not NameMatcher matcher)
-        {
-            return false;
-        }
-        string? category = matcher.MatchCategory(title) ?? matcher.GuessCategory([.. rows.Select(r => r.Text)]);
-        return category is not null && rows.All(r => matcher.Match(category, r.Text, r.Width) is { IsMatch: true, Score: >= 1 });
-    }
+        => _matcher is NameMatcher matcher && matcher.WhyNotAllExact(title, rows) is null;
 
     // ── 手動指定、移除 ──
 
@@ -927,7 +942,7 @@ public sealed class MainForm : Form
         }
         else
         {
-            status = "新增";
+            status = f.ByGlyph ? "新增（字形比對）" : "新增";
             color = UiColors.PickForList(Color.SeaGreen, Color.LightGreen);
             check = true;
         }
@@ -1015,7 +1030,18 @@ public sealed class MainForm : Form
                     $"縮放 {scale}、辨識放大 {_reader.OcrScale} 倍、語言 {_reader.LanguageName}",
                     $"標題：「{snapshot.TitleText}」（{snapshot.TitleScale} 倍）→ 分類：{_matcher?.MatchCategory(snapshot.TitleText) ?? "（對不到）"}",
                     $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]) ?? "（推測不出來）"}",
+                    $"認得的字形：{_glyphs.Count} 個{(snapshot.Rows.Any(r => r.Glyphs is not null) ? "" : "（這張畫面不能比對字形：放大倍率不到 150%，或量不到字寬）")}",
                 ];
+                // 實際讀取時這一頁會不會只用字形讀（不做文字辨識）；不會的話是卡在哪裡
+                if (Math.Abs(scale - 1) <= 0.001 && _matcher is NameMatcher m0)
+                {
+                    List<ListRow>? byGlyphs = DiscoveryListReader.ReadByGlyphs(client, _reader.Layout, scale, _glyphs.ReadExact);
+                    string? why = byGlyphs is null ? "有的列有不認得的字（看下面每一列的〔字形：…〕，「？」是不認得的）"
+                        : byGlyphs.Count == 0 ? "清單上沒有字"
+                        : m0.WhyNotAllExact("", [.. byGlyphs.Select(r => (r.Text, r.TextWidth))]);
+                    lines.Add(why is null ? "字形優先：這一頁實際讀取時只用字形讀，不做文字辨識"
+                        : $"字形優先：這一頁實際讀取時要做文字辨識（{why}）");
+                }
                 // 每一列：辨識讀到的原文 → 比對結果（套用錯字對照表、同一頁推斷之後，和實際讀取時一樣）
                 string? category = _matcher?.MatchCategory(snapshot.TitleText)
                                    ?? _matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);
@@ -1037,8 +1063,14 @@ public sealed class MainForm : Form
                         result = m.Item is null ? " → 找不到"
                             : $" → {m.Item.Name}（{(m.Score == 0 ? "推斷" : m.Score.ToString("0%", CultureInfo.InvariantCulture))}" +
                               $"{(m.Ambiguous ? "，不確定" : "")}{(m.IsVariant ? "，同名的一組" : "")}）";
+                        // 結果的字不是文字辨識讀到的：是比對字形認出來的
+                        if (m.Score >= 1 && picks[at].Text != "" && !row.Readings.Contains(picks[at].Text))
+                        {
+                            result += "〔字形比對〕";
+                        }
                     }
-                    lines.Add($"第 {row.Index + 1} 列：{read}{(row.HasCard ? "（有卡片）" : "")}{result}");
+                    string glyphRead = row.Glyphs is null ? "" : $"〔字形：{_glyphs.Read(row.Glyphs)}〕";
+                    lines.Add($"第 {row.Index + 1} 列：{read}{glyphRead}{(row.HasCard ? "（有卡片）" : "")}{result}");
                 }
                 File.WriteAllLines(stem + ".txt", lines);
             }
@@ -1237,6 +1269,7 @@ public sealed class MainForm : Form
         _settings.WindowHeight = bounds.Height;
         _settings.Character = Character;
         _settings.Save();
+        _glyphs.SaveIfDirty();
         base.OnFormClosing(e);
     }
 

@@ -139,6 +139,14 @@ public class NameMatcherTests
         Assert.Equal("海埔姜", chained.Match("植物", "冫每埔姜", TestBook.GameWidth("海埔姜")).Item?.Name);
     }
 
+    [Theory]
+    [InlineData("All", true)] // GVOexcel-AllSheet 產生的彙整頁：不是分類，不比對、不寫入
+    [InlineData("all ", true)]
+    [InlineData("史跡", false)]
+    [InlineData("大型生物", false)]
+    public void 彙整頁不當成分類(string sheet, bool summary)
+        => Assert.Equal(summary, GVODiscoverySync.Excel.DiscoveryBook.IsSummarySheet(sheet));
+
     [Fact]
     public void 名稱對照表內建關島()
     {

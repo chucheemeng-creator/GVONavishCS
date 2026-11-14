@@ -1,8 +1,10 @@
 // Found.cs
 // 讀到的一筆結果（清單上的一列），和同名組的列的身分。不依賴畫面，測試專案也能用。
 
+using System.Collections.Generic;
 using GVODiscoverySync.Excel;
 using GVODiscoverySync.Matching;
+using GVODiscoverySync.Ocr;
 
 namespace GVODiscoverySync.Recognition;
 
@@ -37,6 +39,12 @@ public sealed class Found
 
     /// <summary>畫面上量到的字寬（遊戲像素，0 表示沒量到）。讀不出來、對不到的列用來在選擇視窗只列出字數對得上的。</summary>
     public double TextWidth { get; init; }
+
+    /// <summary>這一列每一格的字形（使用者確認這一筆之後，用來學還不認得的字）。</summary>
+    public IReadOnlyList<Glyph>? Glyphs { get; set; }
+
+    /// <summary>這一筆是比對字形認出來的（文字辨識讀不出來或讀錯，但每個字的字形都和學過的一樣）。</summary>
+    public bool ByGlyph { get; set; }
 
     /// <summary>這一列有字但讀不出來（Note 說明它在哪兩個發現物之間）。</summary>
     public bool Unreadable { get; init; }
