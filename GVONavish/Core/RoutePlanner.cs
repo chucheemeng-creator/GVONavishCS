@@ -585,22 +585,22 @@ public class RoutePlanner
                 double len2 = abx * abx + aby * aby;
                 double t = len2 > 0 ? ((w.X - a.X) * abx + (w.Y - a.Y) * aby) / len2 : 0;
                 t = Math.Clamp(t, 0, 1);
-                var target = (X: a.X + abx * t, Y: a.Y + aby * t);
+                var (targetX, targetY) = (a.X + abx * t, a.Y + aby * t);
 
                 // 二分法：往目標移動，能移多遠就移多遠
                 double lo = 0, hi = 1;
                 for (int it = 0; it < 10; it++)
                 {
                     double mid = (lo + hi) / 2;
-                    var c = (X: w.X + (target.X - w.X) * mid, Y: w.Y + (target.Y - w.Y) * mid);
+                    var c = (X: w.X + (targetX - w.X) * mid, Y: w.Y + (targetY - w.Y) * mid);
                     if (LineIsClear(a, c, needA) && LineIsClear(c, b, needB)
                         && (_wind is null || LineTime(a, c) + LineTime(c, b) <= timeNow)) lo = mid;
                     else hi = mid;
                 }
-                double dist = Math.Sqrt((target.X - w.X) * (target.X - w.X) + (target.Y - w.Y) * (target.Y - w.Y)) * lo;
+                double dist = Math.Sqrt((targetX - w.X) * (targetX - w.X) + (targetY - w.Y) * (targetY - w.Y)) * lo;
                 if (dist > 0.25)
                 {
-                    w = (w.X + (target.X - w.X) * lo, w.Y + (target.Y - w.Y) * lo);
+                    w = (w.X + (targetX - w.X) * lo, w.Y + (targetY - w.Y) * lo);
                     p[k] = w;
                     moved = true;
                     if (_wind is not null) timeNow = LineTime(a, w) + LineTime(w, b);
@@ -630,9 +630,9 @@ public class RoutePlanner
         bool towardPrevious, int need, double timeNow)
     {
         var w = p[k];
-        var toward = towardPrevious ? a : b;
+        var (towardX, towardY) = towardPrevious ? a : b;
         var other = towardPrevious ? b : a;
-        double dx = toward.X - w.X, dy = toward.Y - w.Y;
+        double dx = towardX - w.X, dy = towardY - w.Y;
 
         // 二分法：最多滑到離目標點還有一點距離的地方（滑到底的話，這個轉折點就多餘了，由上面的檢查拿掉）
         double lo = 0, hi = 0.98;
