@@ -91,15 +91,15 @@ public class ShipMotion
         }
 
         double t = timeMs / 1000.0;
-        var last = _segment[^1];
+        var (T, X, Y) = _segment[^1];
 
         // 和上一個點隔太久（測量中斷、進出港），舊的點已經沒有參考價值，從這一點重新開始
-        if (t - last.T > MaxGapSeconds)
+        if (t - T > MaxGapSeconds)
         {
             Reset(p, timeMs);
             return;
         }
-        double x = last.X + World.WrappedDeltaX(_lastRawX, p.X);
+        double x = X + World.WrappedDeltaX(_lastRawX, p.X);
         double y = p.Y;
         _lastRawX = p.X;
 
@@ -169,23 +169,23 @@ public class ShipMotion
         }
 
         double sumT = 0, sumX = 0, sumY = 0;
-        foreach (var s in _segment)
+        foreach (var (T, X, Y) in _segment)
         {
-            sumT += s.T;
-            sumX += s.X;
-            sumY += s.Y;
+            sumT += T;
+            sumX += X;
+            sumY += Y;
         }
         ct = sumT / n;
         cx = sumX / n;
         cy = sumY / n;
 
         double stt = 0, stx = 0, sty = 0;
-        foreach (var s in _segment)
+        foreach (var (T, X, Y) in _segment)
         {
-            double dt = s.T - ct;
+            double dt = T - ct;
             stt += dt * dt;
-            stx += dt * (s.X - cx);
-            sty += dt * (s.Y - cy);
+            stx += dt * (X - cx);
+            sty += dt * (Y - cy);
         }
         if (stt <= 0)
         {
