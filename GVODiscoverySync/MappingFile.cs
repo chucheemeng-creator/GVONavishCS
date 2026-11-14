@@ -133,7 +133,7 @@ public sealed class MappingFile
     private (MappingFile Table, bool Migrated, string? Problem) Load(IReadOnlyDictionary<string, string>? oldSettings)
     {
         MappingFile table = this;
-        bool migrated = false;
+        bool migrated;
         if (!File.Exists(FilePath))
         {
             Dictionary<string, string> initial = new(_builtIn);
