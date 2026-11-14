@@ -350,7 +350,7 @@ public sealed class DiscoveryListReader
             {
                 return null;
             }
-            rows.Add(new ListRow(row, text, HasCardIcon(client, layout, row, scale), [text], width, cells));
+            rows.Add(new ListRow(row, text, HasCardIcon(client, layout, row, scale), [text], width, cells, Math.Abs(scale - 1) <= 0.001));
         }
         return rows;
     }

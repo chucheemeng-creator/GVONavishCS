@@ -3,7 +3,7 @@
   發佈新版時：改好 .csproj 的 <Version>，同時改這個檔案（下一行的版本號要和 <Version> 一樣，不一樣時不會發佈），
   一起合併到 master，再到 Actions 執行「發佈新版」。這段註解不會出現在 Release 上。
 -->
-<!-- version: 0.2.67 -->
+<!-- version: 0.2.68 -->
 > ⚠️ **測試版（Pre-release）**：功能還在持續改進中，可能遇到讀不準或判斷錯誤的情況。
 > 寫入前程式會自動備份 Excel（在 `backup\` 資料夾），遇到問題歡迎到 [Issues](https://github.com/chucheemeng-creator/GVONavishCS/issues) 回報，附上「存下遊戲畫面」存的檔案會更好處理。
 
