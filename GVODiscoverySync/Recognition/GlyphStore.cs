@@ -305,6 +305,28 @@ public sealed class GlyphStore
     public string Read(IReadOnlyList<Glyph>? cells)
         => cells is null ? "" : string.Concat(cells.Select(c => _chars.TryGetValue(c.ToString(), out HashSet<char>? chars) ? chars.Min() : '？'));
 
+    /// <summary>
+    /// 這一列的每個字都認得時，讀出來的文字；有任何一格不認得（或是空的）就是 null。
+    /// 「字形優先」用：整頁每一列都讀得出來時不用做文字辨識。
+    /// </summary>
+    public string? ReadExact(IReadOnlyList<Glyph> cells)
+    {
+        if (cells.Count == 0)
+        {
+            return null;
+        }
+        char[] text = new char[cells.Count];
+        for (int i = 0; i < cells.Count; i++)
+        {
+            if (cells[i].IsEmpty || !_chars.TryGetValue(cells[i].ToString(), out HashSet<char>? chars))
+            {
+                return null;
+            }
+            text[i] = chars.Min();
+        }
+        return new string(text);
+    }
+
     // 內建的字形（包在 exe 裡的 BuiltInGlyphs.json）：存檔時和內建一樣的不用存
     private readonly Dictionary<char, string> _builtIn = [];
 

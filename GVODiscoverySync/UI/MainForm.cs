@@ -102,6 +102,7 @@ public sealed class MainForm : Form
         if (_reader is not null)
         {
             _reader.SnapGlyph = _glyphs.Snap; // 放大顯示時，把糊掉的字形換成最像的已知字形
+            _reader.GlyphText = _glyphs.ReadExact; // 每個字都認得的頁面直接用字形讀，不做文字辨識
         }
         if (_reader is not null)
         {
@@ -633,7 +634,7 @@ public sealed class MainForm : Form
         if (category is null)
         {
             category = _matcher.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);
-            how = "（分類由清單內容判斷）";
+            how = snapshot.ByGlyphs ? "（用字形讀取）" : "（分類由清單內容判斷）";
         }
         if (category is null)
         {

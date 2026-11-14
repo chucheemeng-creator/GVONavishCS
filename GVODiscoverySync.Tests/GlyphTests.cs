@@ -111,6 +111,35 @@ public class GlyphTests
     }
 
     [Fact]
+    public void 字形優先_每個字都認得的頁面直接讀出文字()
+    {
+        // 內建的字形表認得這一頁的每個字：不用文字辨識，每一列讀出來的字和 Excel 完全一樣、字寬也對，卡片也看得到
+        GlyphStore store = GlyphStore.Load(TestBook.DataPath("no-such-file.json"));
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        List<ListRow>? rows = DiscoveryListReader.ReadByGlyphs(client, new ListLayout(), 1, store.ReadExact);
+        Assert.NotNull(rows);
+        Assert.Equal(Astronomy, rows.Select(r => r.Text));
+        Assert.All(rows, r => Assert.True(r.HasCard));
+        Assert.All(rows, r => Assert.True(TestBook.Matcher.Match("天文", r.Text, r.TextWidth) is { IsMatch: true, Score: >= 1 }));
+
+        // Excel 和遊戲用的字不一樣的那一列（遊戲上是「阿閦如来」）：讀出來是 Excel 的寫法
+        using Bitmap relics = Screen("relics-akshobhya.png");
+        Assert.Equal("阿閦如來", store.ReadExact(Cells(relics, 6, "阿閦如來")));
+    }
+
+    [Fact]
+    public void 字形優先_有不認得的字就不用()
+    {
+        // 只學過一列：其他列有不認得的字，整頁交給文字辨識
+        using Bitmap client = Screen("astronomy-all-cards.png");
+        GlyphStore store = new();
+        store.Learn("獵戶座", Cells(client, 5, "獵戶座"));
+        Assert.Equal("獵戶座", store.ReadExact(Cells(client, 5, "獵戶座")));
+        Assert.Null(store.ReadExact(Cells(client, 6, "烏鴉座")));
+        Assert.Null(DiscoveryListReader.ReadByGlyphs(client, new ListLayout(), 1, store.ReadExact));
+    }
+
+    [Fact]
     public void 認得的字只看到一次不一樣的字形不會被換掉()
     {
         using Bitmap client = Screen("astronomy-all-cards.png");

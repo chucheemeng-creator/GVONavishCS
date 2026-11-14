@@ -46,6 +46,9 @@ public sealed class ListSnapshot
 
     /// <summary>標題是用幾倍放大讀到的（給除錯用）。</summary>
     public double TitleScale { get; init; }
+
+    /// <summary>這一頁每一列都是用字形讀出來的，沒有做文字辨識（標題也沒讀，分類由清單內容判斷）。</summary>
+    public bool ByGlyphs { get; init; }
 }
 
 /// <summary>辨識前處理好的圖（BGRA，白底黑字，四周有白邊）。</summary>
@@ -208,6 +211,7 @@ public sealed class DiscoveryListReader
     /// 不能用時換別的放大倍率再讀一次標題。
     /// allConfident 判斷第一個倍率讀到的清單是不是每一列都確定對到了（參數是標題、每一列讀到的字和量到的字寬）；
     /// 是的話就不用再換倍率讀，省下兩次文字辨識。null 時一律用全部的倍率讀（除錯輸出用，看得到每種倍率的結果）。
+    /// 有設定 GlyphText 時先用字形讀：每一列都讀得出來、allConfident 也確定時，完全不做文字辨識（標題是 ""）。
     /// </summary>
     public async Task<ListSnapshot> ReadAsync(Bitmap client, double scale, Func<string, bool>? acceptTitle = null,
         Func<string, IReadOnlyList<(string Text, double Width)>, bool>? allConfident = null)
@@ -217,6 +221,16 @@ public sealed class DiscoveryListReader
         if (titleRect.Width <= 0 || listRect.Width <= 0 || listRect.Height <= 0)
         {
             return new ListSnapshot(); // 遊戲畫面太小，對不到位置
+        }
+
+        // 字形優先：每一列的每個字都認得、而且都和 Excel 的名稱完全一樣時，這一頁不做文字辨識（快很多，也不會讀錯字）。
+        // 有任何一列沒把握（有不認得的字、有英數字或括號、對不到名稱）就照原本的方式整頁做文字辨識。
+        // 只在沒有放大顯示時用：放大顯示時的字形是「最像的」，不是精確的，要有文字辨識互相對照
+        if (allConfident is not null && GlyphText is not null && Math.Abs(scale - 1) <= 0.001
+            && ReadByGlyphs(client, Layout, scale, GlyphText, SnapGlyph) is List<ListRow> byGlyphs && byGlyphs.Count > 0
+            && allConfident("", [.. byGlyphs.Select(r => (r.Text, r.TextWidth))]))
+        {
+            return new ListSnapshot { Rows = byGlyphs, ByGlyphs = true };
         }
 
         string title = "";
@@ -311,6 +325,34 @@ public sealed class DiscoveryListReader
                 ReadGlyphs(client, Layout, row, scale, Width(row), SnapGlyph), Math.Abs(scale - 1) <= 0.001));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
+    }
+
+    /// <summary>
+    /// 每一列都用字形讀出文字（glyphText：每個字都認得才有結果）；有任何一列讀不出來時回傳 null。空白列不算。
+    /// </summary>
+    public static List<ListRow>? ReadByGlyphs(Bitmap client, ListLayout layout, double scale,
+        Func<IReadOnlyList<Glyph>, string?> glyphText, Func<Glyph, Glyph>? snap = null)
+    {
+        Rectangle listRect = ToScreen(layout.ListX, layout.ListY, layout.ListWidth, layout.ListHeight, client.Size, scale);
+        List<ListRow> rows = [];
+        for (int row = 0; row < layout.RowCount; row++)
+        {
+            int top = listRect.Y + (int)Math.Round(row * layout.RowHeight * scale);
+            Rectangle rowRect = Rectangle.Intersect(
+                new Rectangle(listRect.X, top, listRect.Width, (int)Math.Round(layout.RowHeight * scale)), listRect);
+            if (!HasText(client, rowRect, scale))
+            {
+                continue; // 空白列
+            }
+            double width = MeasureTextWidth(client, rowRect, scale);
+            IReadOnlyList<Glyph>? cells = ReadGlyphs(client, layout, row, scale, width, snap);
+            if (cells is null || glyphText(cells) is not string text)
+            {
+                return null;
+            }
+            rows.Add(new ListRow(row, text, HasCardIcon(client, layout, row, scale), [text], width, cells));
+        }
+        return rows;
     }
 
     // 用 ocrScale 倍放大讀一次清單，回傳 第幾列 → 文字
@@ -495,6 +537,12 @@ public sealed class DiscoveryListReader
     /// 放大顯示時，把取樣到的字形換成最像的已知字形（GlyphStore.Snap）；沒設定的話，放大顯示時不讀字形。
     /// </summary>
     public Func<Glyph, Glyph>? SnapGlyph { get; set; }
+
+    /// <summary>
+    /// 把一列的字形讀成文字（GlyphStore.ReadExact）：每個字都認得才有結果，否則是 null。
+    /// 有設定的話，每一列都讀得出來、而且都確定對到名稱的頁面不做文字辨識（見 ReadAsync）。
+    /// </summary>
+    public Func<IReadOnlyList<Glyph>, string?>? GlyphText { get; set; }
 
     /// <summary>
     /// 清單第 row 列每一格（一個中文字寬）的字形。textWidth 是這一列量到的字寬（決定有幾格）。量不到字寬時回傳 null。
