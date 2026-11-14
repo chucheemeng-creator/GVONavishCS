@@ -391,10 +391,10 @@ public class MapView : Control
     /// <summary>世界座標 → 畫面座標的換算資料。</summary>
     private readonly struct ViewTransform(double left, double top, double mapWidth, double kx, double ky, int viewWidth)
     {
-        public readonly double Left = left;     // 第一張地圖的左邊（畫面座標，≤ 0）
+        public readonly double Left = left;         // 第一張地圖的左邊（畫面座標，≤ 0）
         public readonly double Top = top;
         public readonly double MapWidth = mapWidth; // 一整張地圖在畫面上的寬度
-        public readonly double Kx = kx;       // 一個世界座標 = 幾個畫面像素
+        public readonly double Kx = kx;             // 一個世界座標 = 幾個畫面像素
         public readonly double Ky = ky;
         public readonly int ViewWidth = viewWidth;
     }
