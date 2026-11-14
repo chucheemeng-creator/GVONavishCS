@@ -72,7 +72,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
     // 同名的一組 → 使用者移除的「沒有身分」的筆數（沒有鄰居的列，補的時候要算進去）
     private readonly Dictionary<DiscoveryItem, int> _anonymousRemoved = [];
     // 同名組的一列（AddVariants 用）
-    private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence);
+    private sealed record VariantRow(string Text, bool HasCard, Occurrence? Occurrence, bool ByGlyph);
 
     /// <summary>全部清掉（重新開始讀）。排序方式也重新判斷（使用者可能已經按 ⇅ 換了排序）。</summary>
     public void Clear()
@@ -234,6 +234,10 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         for (int i = 0; i < picks.Count; i++)
         {
             (ListRow row, string text, MatchResult match) = picks[i];
+            // 記在這一筆上、之後確認時用來學字形的格子：放大顯示時的字形是「最像的已知字形」，不是精確的，不能拿來學
+            IReadOnlyList<Glyph>? learnable = row.GlyphsExact ? row.Glyphs : null;
+            // 這一列是用字形認出來的（同名的一組每一列各自記，不共用同一個比對結果）
+            bool byGlyph = _glyphMatches.Exists(m => ReferenceEquals(m, match));
             Occurrence? occurrence = null;
             if (match.IsMatch && match.IsVariant)
             {
@@ -247,7 +251,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             }
             if (match.IsMatch && match.IsVariant && byValue && PickVariantByMerit(picks, i, match.Variants) is DiscoveryItem exact)
             {
-                if (AddVariantExact(category, text, row.HasCard, match, exact, occurrence))
+                if (AddVariantExact(category, text, row.HasCard, match, exact, occurrence, byGlyph))
                 {
                     added++;
                 }
@@ -258,7 +262,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
                 // 讀不出來也推斷不出來：記下它在哪兩個發現物之間，讓使用者自己去遊戲裡看
                 string above = i > 0 ? NameOf(picks[i - 1]) : "";
                 string below = i + 1 < picks.Count ? NameOf(picks[i + 1]) : "";
-                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth, row.Glyphs))
+                if (AddUnreadable(category, above, below, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1), row.TextWidth, learnable))
                 {
                     added++;
                 }
@@ -272,11 +276,11 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
                     group = (match, new List<VariantRow>());
                     variantRows[first] = group;
                 }
-                group.Rows.Add(new VariantRow(text, row.HasCard, occurrence));
+                group.Rows.Add(new VariantRow(text, row.HasCard, occurrence, byGlyph));
             }
             else if (AddResult(category, text, row.HasCard, match, ConfidentName(picks, i - 1), ConfidentName(picks, i + 1),
                          match.IsMatch ? "" : PositionNote(i > 0 ? NameOf(picks[i - 1]) : "", i + 1 < picks.Count ? NameOf(picks[i + 1]) : "", row.TextWidth),
-                         row.TextWidth, row.Glyphs))
+                         row.TextWidth, learnable))
             {
                 added++;
             }
@@ -289,7 +293,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         // 這一頁用字形認出來、這次加進來（或從「推斷」換成這個結果）的幾筆：做記號，畫面上顯示「字形比對」
         foreach (Found f in _matched.Values)
         {
-            if (!f.ByGlyph && !f.Manual && _glyphMatches.Exists(m => ReferenceEquals(m, f.Match)))
+            if (!f.ByGlyph && !f.Manual && !f.Match.IsVariant && _glyphMatches.Exists(m => ReferenceEquals(m, f.Match)))
             {
                 f.ByGlyph = true;
                 Updated?.Invoke(f, false);
@@ -668,7 +672,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
 
     /// <summary>加入一筆已經確定是同名組裡哪一個的列（依功績判斷的）。已經有了就回傳 false。</summary>
     private bool AddVariantExact(string category, string text, bool hasCard, MatchResult match, DiscoveryItem item,
-        Occurrence? occurrence)
+        Occurrence? occurrence, bool byGlyph = false)
     {
         // 這一列（同一個身分）已經在清單上、而且確定了（手動指定、或看齊了）：尊重它，什麼都不動。
         // 要放在最前面：否則下面會先把佔住這個發現物的那一筆挪走，然後才發現不用加
@@ -742,7 +746,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
         Found found = new()
         {
             Category = category, ScreenText = text, Match = match, HasCard = hasCard, Assigned = item, Occurrence = occurrence,
-            ByMerit = true,
+            ByMerit = true, ByGlyph = byGlyph,
         };
         _matched[item] = found;
         Added?.Invoke(found);
@@ -816,7 +820,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
             Found found = new()
             {
                 Category = category, ScreenText = row.Text, Match = match, HasCard = row.HasCard,
-                Assigned = item, VariantUnsure = !complete, Occurrence = row.Occurrence,
+                Assigned = item, VariantUnsure = !complete, Occurrence = row.Occurrence, ByGlyph = row.ByGlyph,
             };
             _matched[item] = found;
             Added?.Invoke(found);
@@ -863,6 +867,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
                     // 之前讀不出來、推斷出來的，這次讀到字了：換成讀到的結果（預設打勾）
                     existing.ScreenText = screenText;
                     existing.Match = match;
+                    existing.Glyphs ??= cells;
                     existing.HasCard |= hasCard;
                     Updated?.Invoke(existing, true);
                 }

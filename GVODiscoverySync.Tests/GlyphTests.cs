@@ -287,6 +287,30 @@ public class GlyphTests
         }
         Assert.Equal(1845, store.Count); // 放大顯示時不學
         Assert.False(store.Dirty);
+
+        // 放大顯示時的字形不是精確的：不記在結果上，所以之後手動指定、勾選後寫入 Excel 也不會拿來學
+        Assert.All(session.All, f => Assert.Null(f.Glyphs));
+    }
+
+    [Fact]
+    public void 同名的兩列_各自記是不是用字形認出來的()
+    {
+        // 同一頁兩列「聖母加冠」：第一列文字辨識讀到了，第二列讀不出來、靠字形認出來。只有第二列是「字形比對」
+        const string name = "聖母加冠";
+        IReadOnlyList<Glyph> cells = [.. Enumerable.Range(1, name.Length).Select(i => Glyph.Parse(string.Concat(Enumerable.Repeat($"{i:x4}", 20)))!)];
+        GlyphStore store = new();
+        store.Learn(name + "1", cells);
+        DiscoverySession session = new(TestBook.Book, TestBook.Matcher, store);
+        double width = TestBook.GameWidth(name);
+        session.AddPage("美術品",
+        [
+            new ListRow(0, name, false, [name], width, cells),
+            new ListRow(1, "", false, Array.Empty<string>(), width, cells),
+        ]);
+
+        List<Found> group = [.. session.Matched.Values.Where(f => f.Match.IsVariant)];
+        Assert.Equal(2, group.Count);
+        Assert.Single(group, f => f.ByGlyph);
     }
 
     [Fact]
