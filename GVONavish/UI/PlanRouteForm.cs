@@ -366,7 +366,7 @@ public partial class PlanRouteForm : Form
     public static bool TryParse(string text, out WorldPoint p)
     {
         p = default;
-        MatchCollection m = MyRegex().Matches(text ?? "");
+        MatchCollection m = DigitsRegex().Matches(text ?? "");
         if (m.Count != 2) return false;
         if (!int.TryParse(m[0].Value, out int x) || !int.TryParse(m[1].Value, out int y)) return false;
         p = new WorldPoint(x, y);
@@ -374,5 +374,5 @@ public partial class PlanRouteForm : Form
     }
 
     [GeneratedRegex(@"\d+")]
-    private static partial Regex MyRegex();
+    private static partial Regex DigitsRegex();
 }
