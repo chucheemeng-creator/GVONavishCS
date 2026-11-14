@@ -95,8 +95,7 @@ public class MainForm : Form
     private readonly bool _routesCanSave = true;      // routes.json 讀不出來又無法改名保留時是 false，不存檔
     private bool _routesSaveFailed;          // 上一次存航線失敗（狀態列顯示警告）
     private bool _planning;                  // 正在規劃中（避免同時按兩次）
-    private readonly System.Collections.Generic.List<PlannedRoute> _legs =
-        new System.Collections.Generic.List<PlannedRoute>(); // 規劃航線的每一段
+    private readonly System.Collections.Generic.List<PlannedRoute> _legs = []; // 規劃航線的每一段
     private double? _planAlong;       // 船在規劃航線上走到哪裡了（RouteProgress.Along）；航線改了就清掉
     private readonly WindMap? _wind = WindMap.Load(WindMap.DefaultPath); // 每個海域的季節風向；找不到 winds.bin 時是 null
     private Season _season;           // 用哪個季節的風向
@@ -316,7 +315,7 @@ public class MainForm : Form
         _mapView.ShowRoutes = _settings.ShowRoutes;
         _miRoutes.Checked = _settings.ShowRoutes;
         SetWindMode(_settings.Season, _settings.ConsiderWind);
-        SetSpeedCorner(Enum.IsDefined(typeof(ScreenCorner), _settings.SpeedCorner) ? _settings.SpeedCorner : ScreenCorner.TopRight);
+        SetSpeedCorner(Enum.IsDefined(_settings.SpeedCorner) ? _settings.SpeedCorner : ScreenCorner.TopRight);
         _mapView.SetFocus(_settings.LastX, _settings.LastY);
 
         // 船先放在上次關閉時的位置：在港口裡（沒有測量）也能直接從這裡規劃航線。
