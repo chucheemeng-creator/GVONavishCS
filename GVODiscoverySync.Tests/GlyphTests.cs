@@ -140,6 +140,39 @@ public class GlyphTests
         Assert.Null(DiscoveryListReader.ReadByGlyphs(client, new ListLayout(), 1, store.ReadExact));
     }
 
+    // 測試用的假字形：20 列都是 row，第一列換成 first
+    private static Glyph Fake(string row, string? first = null)
+        => Glyph.Parse((first ?? row) + string.Concat(Enumerable.Repeat(row, 19)))!;
+
+    [Fact]
+    public void 字形優先_同一個字形對到兩個字時不讀()
+    {
+        // 手動指定錯了（把「甲乙丙丁」那一列指定成「甲戊丙丁」）：「乙」的字形也被記成「戊」。
+        // 這一格分不出是哪個字，不能只靠字形讀，要交給文字辨識
+        IReadOnlyList<Glyph> cells = [Fake("0001"), Fake("0002"), Fake("0003"), Fake("0004")];
+        GlyphStore store = new();
+        store.Learn("甲乙丙丁", cells);
+        Assert.Equal("甲乙丙丁", store.ReadExact(cells));
+        store.LearnPicked("甲戊丙丁", cells);
+        Assert.Null(store.ReadExact(cells));
+        Assert.Equal("甲", store.ReadExact([cells[0]]));
+    }
+
+    [Fact]
+    public void 放大顯示_同一個字有兩種相近的字形時照樣認得()
+    {
+        // 「甲」有兩種只差幾個點的字形（換字形時舊的留作另一種字形）：第二像的要找別的字，不能拿自己的另一種字形來比
+        Glyph one = Fake("0ff0"), two = Fake("0ff0", "0fff"), other = Fake("f00f");
+        GlyphStore store = new();
+        store.Learn("甲", [one]);
+        store.Learn("甲", [two]);
+        store.Learn("甲", [two]); // 連續兩次：換成 two，one 留作另一種字形
+        store.Learn("乙", [other]);
+        Assert.NotSame(Glyph.Unreadable, store.Snap(one));
+        Assert.NotSame(Glyph.Unreadable, store.Snap(two));
+        Assert.Same(Glyph.Unreadable, store.Snap(Fake("0000", "8001"))); // 都不像
+    }
+
     [Fact]
     public void 認得的字只看到一次不一樣的字形不會被換掉()
     {

@@ -277,28 +277,42 @@ public sealed class GlyphStore
     public Glyph Snap(Glyph raw)
     {
         Glyph? best = null;
-        int bestDistance = int.MaxValue, second = int.MaxValue;
-        string bestKey = "";
+        int bestDistance = int.MaxValue;
         foreach (Glyph glyph in _glyphs.Values.Concat(_variants.Values.SelectMany(v => v)))
         {
             int distance = glyph.Distance(raw);
             if (distance < bestDistance)
             {
-                string key = glyph.ToString();
-                if (key != bestKey)
-                {
-                    second = bestDistance; // 原本最像的變成第二像（同一個字形的「·」「‧」不算）
-                }
                 best = glyph;
                 bestDistance = distance;
-                bestKey = key;
-            }
-            else if (distance < second && glyph.ToString() != bestKey)
-            {
-                second = distance;
             }
         }
-        return best is not null && bestDistance <= 28 && second - bestDistance >= 5 ? best : Glyph.Unreadable;
+        if (best is null || bestDistance > 28)
+        {
+            return Glyph.Unreadable;
+        }
+        // 第二像的要是「別的字」：同一個字的另一種字形（可能只差幾個點）、同一個字形的「·」「‧」不算，
+        // 否則有兩種相近字形的字會因為「不夠明顯」而認不出來
+        HashSet<char> same = _chars.TryGetValue(best.ToString(), out HashSet<char>? chars) ? chars : [];
+        int second = int.MaxValue;
+        foreach ((char c, Glyph glyph) in _glyphs)
+        {
+            if (!same.Contains(c))
+            {
+                second = Math.Min(second, glyph.Distance(raw));
+            }
+        }
+        foreach ((char c, List<Glyph> others) in _variants)
+        {
+            if (!same.Contains(c))
+            {
+                foreach (Glyph glyph in others)
+                {
+                    second = Math.Min(second, glyph.Distance(raw));
+                }
+            }
+        }
+        return second - (long)bestDistance >= 5 ? best : Glyph.Unreadable;
     }
 
     /// <summary>這一列每一格認出來的字（不認得的是「？」），除錯輸出用。</summary>
@@ -306,7 +320,7 @@ public sealed class GlyphStore
         => cells is null ? "" : string.Concat(cells.Select(c => _chars.TryGetValue(c.ToString(), out HashSet<char>? chars) ? chars.Min() : '？'));
 
     /// <summary>
-    /// 這一列的每個字都認得時，讀出來的文字；有任何一格不認得（或是空的）就是 null。
+    /// 這一列的每個字都認得、而且每一格只可能是一個字時，讀出來的文字；否則是 null。
     /// 「字形優先」用：整頁每一列都讀得出來時不用做文字辨識。
     /// </summary>
     public string? ReadExact(IReadOnlyList<Glyph> cells)
@@ -319,6 +333,12 @@ public sealed class GlyphStore
         for (int i = 0; i < cells.Count; i++)
         {
             if (cells[i].IsEmpty || !_chars.TryGetValue(cells[i].ToString(), out HashSet<char>? chars))
+            {
+                return null;
+            }
+            // 同一個字形對到不只一個字（例如手動指定時把這個字形記成另一個字的另一種字形）：分不出是哪一個，不讀。
+            // 只有間隔號例外（「·」「‧」「・」在遊戲上是同一個字形，比對名稱時也不看標點）
+            if (chars.Count > 1 && chars.Any(char.IsLetterOrDigit))
             {
                 return null;
             }
