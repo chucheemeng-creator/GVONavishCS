@@ -19,7 +19,7 @@ using GVONavish.Core;
 
 namespace GVONavish.UI;
 
-public class PlanRouteForm : Form
+public partial class PlanRouteForm : Form
 {
     private readonly TextBox _txtStart = new();
     private readonly TextBox _txtEnd = new();
@@ -366,10 +366,13 @@ public class PlanRouteForm : Form
     public static bool TryParse(string text, out WorldPoint p)
     {
         p = default;
-        MatchCollection m = Regex.Matches(text ?? "", @"\d+");
+        MatchCollection m = MyRegex().Matches(text ?? "");
         if (m.Count != 2) return false;
         if (!int.TryParse(m[0].Value, out int x) || !int.TryParse(m[1].Value, out int y)) return false;
         p = new WorldPoint(x, y);
         return World.IsValid(p);
     }
+
+    [GeneratedRegex(@"\d+")]
+    private static partial Regex MyRegex();
 }
