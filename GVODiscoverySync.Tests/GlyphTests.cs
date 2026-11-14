@@ -102,7 +102,7 @@ public class GlyphTests
         // 沒有檔案時也認得內建的字；和內建一樣的不存檔，只存這台電腦另外學到的
         string path = Path.Combine(Path.GetTempPath(), $"glyphs-{Guid.NewGuid():N}.json");
         GlyphStore store = GlyphStore.Load(path);
-        Assert.Equal(1845, store.Count);
+        Assert.Equal(1849, store.Count);
         Assert.False(store.Dirty);
 
         using Bitmap client = Screen("astronomy-all-cards.png");
@@ -285,7 +285,7 @@ public class GlyphTests
             Assert.True(f.ByGlyph, name);
             Assert.False(f.NeedsConfirm, name);
         }
-        Assert.Equal(1845, store.Count); // 放大顯示時不學
+        Assert.Equal(1849, store.Count); // 放大顯示時不學
         Assert.False(store.Dirty);
 
         // 放大顯示時的字形不是精確的：不記在結果上，所以之後手動指定、勾選後寫入 Excel 也不會拿來學
