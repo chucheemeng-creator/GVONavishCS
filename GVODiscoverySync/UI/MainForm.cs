@@ -698,14 +698,7 @@ public sealed class MainForm : Form
     // 第一個倍率讀到的清單是不是每一列都和 Excel 的名稱完全一樣（而且字數對得上）：是的話不用再換倍率讀。
     // 只看「完全一樣」，不看模糊比對的結果：模糊對到的，換個倍率可能讀得更完整，還是要讀
     private bool AllExact(string title, IReadOnlyList<(string Text, double Width)> rows)
-    {
-        if (_matcher is not NameMatcher matcher)
-        {
-            return false;
-        }
-        string? category = matcher.MatchCategory(title) ?? matcher.GuessCategory([.. rows.Select(r => r.Text)]);
-        return category is not null && rows.All(r => matcher.Match(category, r.Text, r.Width) is { IsMatch: true, Score: >= 1 });
-    }
+        => _matcher is NameMatcher matcher && matcher.WhyNotAllExact(title, rows) is null;
 
     // ── 手動指定、移除 ──
 
@@ -1039,6 +1032,16 @@ public sealed class MainForm : Form
                     $"從清單推測的分類：{_matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]) ?? "（推測不出來）"}",
                     $"認得的字形：{_glyphs.Count} 個{(snapshot.Rows.Any(r => r.Glyphs is not null) ? "" : "（這張畫面不能比對字形：放大倍率不到 150%，或量不到字寬）")}",
                 ];
+                // 實際讀取時這一頁會不會只用字形讀（不做文字辨識）；不會的話是卡在哪裡
+                if (Math.Abs(scale - 1) <= 0.001 && _matcher is NameMatcher m0)
+                {
+                    List<ListRow>? byGlyphs = DiscoveryListReader.ReadByGlyphs(client, _reader.Layout, scale, _glyphs.ReadExact);
+                    string? why = byGlyphs is null ? "有的列有不認得的字（看下面每一列的〔字形：…〕，「？」是不認得的）"
+                        : byGlyphs.Count == 0 ? "清單上沒有字"
+                        : m0.WhyNotAllExact("", [.. byGlyphs.Select(r => (r.Text, r.TextWidth))]);
+                    lines.Add(why is null ? "字形優先：這一頁實際讀取時只用字形讀，不做文字辨識"
+                        : $"字形優先：這一頁實際讀取時要做文字辨識（{why}）");
+                }
                 // 每一列：辨識讀到的原文 → 比對結果（套用錯字對照表、同一頁推斷之後，和實際讀取時一樣）
                 string? category = _matcher?.MatchCategory(snapshot.TitleText)
                                    ?? _matcher?.GuessCategory([.. snapshot.Rows.Where(r => r.Text != "").Select(r => r.Text)]);

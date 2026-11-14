@@ -120,7 +120,8 @@ public class GlyphTests
         Assert.NotNull(rows);
         Assert.Equal(Astronomy, rows.Select(r => r.Text));
         Assert.All(rows, r => Assert.True(r.HasCard));
-        Assert.All(rows, r => Assert.True(TestBook.Matcher.Match("天文", r.Text, r.TextWidth) is { IsMatch: true, Score: >= 1 }));
+        // 沒有標題也判斷得出分類，而且每一列都完全一樣：這一頁不用做文字辨識
+        Assert.Null(TestBook.Matcher.WhyNotAllExact("", [.. rows.Select(r => (r.Text, r.TextWidth))]));
 
         // Excel 和遊戲用的字不一樣的那一列（遊戲上是「阿閦如来」）：讀出來是 Excel 的寫法
         using Bitmap relics = Screen("relics-akshobhya.png");
