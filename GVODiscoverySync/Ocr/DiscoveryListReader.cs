@@ -597,7 +597,7 @@ public sealed class DiscoveryListReader
     // 放大顯示時讀字形：遊戲的每個像素被放大成 scale 個螢幕像素，在它的中心取樣（中心那一點最不受旁邊的像素影響）。
     // 遊戲畫面對到螢幕像素的位置可能差一個像素（視窗位置、邊框寬度不同），所以差一個像素的幾種位置都試，
     // 用認得出最多格的那一種
-    private static IReadOnlyList<Glyph>? ReadScaledGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
+    private static List<Glyph>? ReadScaledGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
         Func<Glyph, Glyph> snap)
     {
         int count = (int)Math.Round((textWidth + 2) / Glyph.Width);

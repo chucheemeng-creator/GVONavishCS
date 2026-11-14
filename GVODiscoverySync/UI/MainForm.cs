@@ -28,7 +28,7 @@ using GVODiscoverySync.Recognition;
 
 namespace GVODiscoverySync.UI;
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
 
     private readonly AppSettings _settings;
@@ -104,10 +104,7 @@ public sealed class MainForm : Form
             _reader.SnapGlyph = _glyphs.Snap; // 放大顯示時，把糊掉的字形換成最像的已知字形
             _reader.GlyphText = _glyphs.ReadExact; // 每個字都認得的頁面直接用字形讀，不做文字辨識
         }
-        if (_reader is not null)
-        {
-            _reader.OcrScale = settings.OcrScale;
-        }
+        _reader?.OcrScale = settings.OcrScale;
         BuildUi();
         RestoreWindow();
         TopMost = settings.TopMost;
@@ -1132,7 +1129,7 @@ public sealed class MainForm : Form
             try
             {
                 using Bitmap bmp = new(path);
-                Match m = Regex.Match(Path.GetFileNameWithoutExtension(path), @"-s(\d+(?:\.\d+)?)$");
+                Match m = MyRegex().Match(Path.GetFileNameWithoutExtension(path));
                 double scale = m.Success
                     ? double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)
                     : Math.Max(1, bmp.Width / 800.0);
@@ -1281,4 +1278,7 @@ public sealed class MainForm : Form
         }
         base.Dispose(disposing);
     }
+
+    [GeneratedRegex(@"-s(\d+(?:\.\d+)?)$")]
+    private static partial Regex MyRegex();
 }

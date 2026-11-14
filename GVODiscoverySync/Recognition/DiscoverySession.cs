@@ -477,7 +477,7 @@ public sealed class DiscoverySession(DiscoveryBook book, NameMatcher matcher, Gl
                     low = null;
                 }
                 // 功績在上下兩列之間（相同也算；同名的一組只要其中一個符合；Excel 沒寫功績的不排除）
-                Func<IReadOnlyList<DiscoveryItem>, bool> fitsMerit = g => g.Any(x =>
+                bool fitsMerit(IReadOnlyList<DiscoveryItem> g) => g.Any(x =>
                     x.Merit <= 0 || ((high is null || x.Merit <= high) && (low is null || x.Merit >= low)));
 
                 // 整列讀不出來（多半是一、兩個字的短名稱）：用字數、排序的上下界、功績、這一頁已確定的排除候選，只剩一個就是它。
