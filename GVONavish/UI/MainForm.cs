@@ -1361,16 +1361,13 @@ public class MainForm : Form
         RouteProgress? progress = _lastReadTime != 0 && _mapView.ShipPosition is WorldPoint ship
             ? RouteProgress.Measure(_legs, ship, _planAlong)
             : null;
-        // 另一個季節走別條路明顯比較快（地圖上的紫色虛線）
-        bool hasAlternate = _considerWind && _legs.Exists(leg => leg.Alternate is not null);
-        string alternateNote = hasAlternate ? $"；{otherName}走紫色的航線比較快" : "";
 
         if (progress is not RouteProgress now)
         {
             string wind = _routeWind is not null && _routeWindOther is not null
                 ? $"，逆風 {seasonName} {_routeWind.HeadwindLength:0}／{otherName} {_routeWindOther.HeadwindLength:0}"
                 : "";
-            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}{alternateNote}";
+            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}";
         }
         _planAlong = now.Along;
 
@@ -1392,7 +1389,7 @@ public class MainForm : Form
             // 只顯示目前選的季節：另一個季節的時間航行中用不到，狀態列也放不下
             text += $"，照目前船速約 {FormatDuration(effective / baseSpeed)}";
         }
-        return text + alternateNote;
+        return text;
     }
 
     /// <summary>
