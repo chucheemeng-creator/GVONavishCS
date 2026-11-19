@@ -84,6 +84,8 @@ public class AppSettings
     /// <summary>讀座標的間隔（毫秒）。</summary>
     public int IntervalMs { get; set; } = 500;
 
+    private static readonly JsonSerializerOptions SaveOptions = new() { WriteIndented = true };
+
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "settings.json");
 
     /// <summary>地圖圖檔的完整路徑。</summary>
@@ -202,8 +204,7 @@ public class AppSettings
         {
             // 先寫到暫存檔再換掉原檔（和 routes.json 一樣）：
             // 每 30 秒會存一次位置，寫到一半斷電或強制結束時，settings.json 才不會變成空檔
-            JsonSerializerOptions options = new() { WriteIndented = true };
-            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, options));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, SaveOptions));
             LastSaveFailed = false;
         }
         catch (Exception ex)

@@ -26,7 +26,7 @@ internal static class Program
         // 淺色／深色／跟隨 Windows（.NET 10 起正式支援）。也要在建立任何視窗之前設定
         // WinForms 的深色模式只支援 Windows 11 以後（高對比模式下 Windows 也會自動不用深色），
         // Windows 10 上一律用淺色
-        SystemColorMode mode = SupportsDarkMode && Enum.TryParse(settings.ColorMode, out SystemColorMode m)
+        SystemColorMode mode = SupportsDarkMode && Enum.TryParse(settings.ColorMode, out SystemColorMode m) && Enum.IsDefined(m)
             ? m : SystemColorMode.Classic;
         Application.SetColorMode(mode);
 

@@ -30,12 +30,11 @@ public static class RouteStore
         public List<ShipRoute>? Routes { get; set; }
     }
 
-    private static JsonSerializerOptions Options()
+    private static readonly JsonSerializerOptions Options = new()
     {
-        JsonSerializerOptions o = new() { WriteIndented = false };
-        o.Converters.Add(new WorldPointConverter());
-        return o;
-    }
+        WriteIndented = false,
+        Converters = { new WorldPointConverter() },
+    };
 
 
     /// <summary>
@@ -56,7 +55,7 @@ public static class RouteStore
             }
             // 內容是 null、或沒有 Routes：不是這個程式存的格式，當成壞掉（走下面的「改名保留」），
             // 不能當成空清單，不然關閉時會用空清單蓋掉原檔
-            FileData data = JsonSerializer.Deserialize<FileData>(File.ReadAllText(FilePath), Options())
+            FileData data = JsonSerializer.Deserialize<FileData>(File.ReadAllText(FilePath), Options)
                 ?? throw new JsonException("航線檔內容是 null");
             List<ShipRoute> routes = data.Routes ?? throw new JsonException("航線檔沒有 Routes");
             if (data.Version > CurrentVersion)
@@ -104,7 +103,7 @@ public static class RouteStore
         try
         {
             FileData data = new() { Routes = [.. routes] };
-            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(data, Options()));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(data, Options));
             return true;
         }
         catch (Exception ex)
