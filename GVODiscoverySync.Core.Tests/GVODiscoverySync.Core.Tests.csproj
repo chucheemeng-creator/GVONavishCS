@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 測試專案的版本號（不發佈，很少改） -->
+    <Version>1.0.0</Version>
+    <!-- 不依賴 Windows：Linux、macOS 也能跑（Excel 讀寫、名稱比對、讀取結果的推斷規則） -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>GVODiscoverySync.Core.Tests</AssemblyName>
+    <RootNamespace>GVODiscoverySync.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GVODiscoverySync.Core\GVODiscoverySync.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 測試資料：發現物名稱清單、實際讀錯過的案例 -->
+    <None Include="TestData\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -65,9 +65,10 @@ dotnet build -c Release
 
 | 資料夾 | 內容 |
 |---|---|
-| `GVO.Common/` | 共用類別庫：找遊戲視窗、顯示縮放換算、截圖、安全存檔 |
+| `GVO.Common/` | 共用類別庫：找遊戲視窗、顯示縮放換算、截圖（只有 Windows 版）、安全存檔（不依賴 Windows） |
 | `GVONavish/` | 航海地圖程式（`GVONavish.exe`） |
 | `GVODiscoverySync/` | 發現物同步：讀遊戲的發現物一覽，在安瑟兒的 Excel 打勾（`GVODiscoverySync.exe`，說明見該資料夾的 README） |
+| `GVODiscoverySync.Core/` | 發現物同步中不依賴 Windows 的部分：Excel 讀寫、名稱比對、字形、讀取結果的推斷規則（測試在 Linux 也能跑） |
 
 ---
 

@@ -1,0 +1,30 @@
+# GVODiscoverySync.Core.Tests
+
+發現物同步工具 `GVODiscoverySync.Core`（不依賴 Windows 的部分）的測試專案（xUnit）。比對規則改了以後跑一遍，確認以前修好的情況沒有被弄壞。
+**Linux、macOS 也能直接跑**（`dotnet test GVODiscoverySync.Core.Tests`）。要實際遊戲截圖的字形測試在 `GVODiscoverySync.Tests`（需要 Windows）。
+
+## 怎麼跑
+
+Visual Studio：「測試 → 測試總管」→「全部執行」。或在方案資料夾執行 `dotnet test`。
+
+## 測了什麼
+
+- **實際案例**（`TestData/OcrCases.tsv`）：實際讀錯過的名稱，例如「鳳蝶」不能被當成確定的黑鳳蝶、
+  「浪子(畫家與莎斯姬亞)」要對到 Excel 的全形括號寫法。每一行一個測試，測試總管裡看得到行號和說明。
+- **模擬讀錯**：Excel 裡每一個名稱，每一種「漏一個字」「錯一個字」「漏兩個字」的情況都試一遍，
+  不能確定地對到錯的名稱（不確定、找不到都可以，使用者會確認）。測試的輸出看得到對、不確定、找不到各幾個。
+- **讀取的流程**（`SessionTests.cs`，測 `Recognition/DiscoverySession.cs`）：用 Excel 的名稱排出遊戲上的一頁
+  （依名稱、依價值），模擬一頁一頁讀進來：排序判斷、重讀和捲動重疊不重複、讀不出來的「蠶」用字數推斷、
+  同一頁已確定的不會是這一列、讀錯的列讀對後拿掉、手動移除和指定、同名的一組（看齊才確定、依價值用功績判斷、移除後不加回來）。
+- **讀寫 Excel**（`DiscoveryBookTests.cs`）：用 Open XML 在測試裡即時產生小的 xlsx，測讀檔、寫入打勾、列號對不上名稱要跳過、失敗不動原檔、備份不覆蓋。
+- **各條規則**：字數（字寬）對不對得上、讀不出來的一個字的推斷、排序上下界、包含、分類判斷、錯字對照表。
+
+## 加新的案例
+
+遇到讀錯的，把除錯 txt 裡那一列加到 `TestData/OcrCases.tsv`（分類、讀到的字、寬度、預期的 Excel 名稱、說明），
+先確認測試失敗、修好程式後再確認通過，以後就不會再壞掉。
+
+## 測試資料
+
+`TestData/Discoveries.tsv` 是從安瑟兒的 Excel（GVOexcel_SWex13-3931.xlsx）匯出的分類、名稱、功績，
+測試不用打開 Excel。Excel 改版時要重新匯出。
