@@ -319,7 +319,7 @@ public sealed class DiscoveryListReader
                 continue; // 空白列
             }
             double width = MeasureTextWidth(client, rowRect, scale);
-            IReadOnlyList<Glyph>? cells = ReadGlyphs(client, layout, row, scale, width, snap, hint);
+            List<Glyph>? cells = ReadGlyphs(client, layout, row, scale, width, snap, hint);
             if (cells is null || glyphText(cells) is not string text)
             {
                 return null;
@@ -523,7 +523,7 @@ public sealed class DiscoveryListReader
     /// 遊戲畫面被 Windows 放大（150% 以上）時：在每個遊戲像素的中心取樣，再用 snap 換成最像的已知字形
     /// （沒有 snap、或放大倍率太小（125%：一個點寬的筆畫會糊到取樣不到）時回傳 null）。
     /// </summary>
-    public static IReadOnlyList<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
+    public static List<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
         Func<Glyph, Glyph>? snap = null, ScaledShiftHint? hint = null)
     {
         if (textWidth <= 0)
@@ -638,10 +638,7 @@ public sealed class DiscoveryListReader
             }
             if (known == count)
             {
-                if (hint is not null)
-                {
-                    hint.Last = (dx, dy);
-                }
+                hint?.Last = (dx, dy);
                 break; // 每一格都認得：就是這個位置
             }
         }
