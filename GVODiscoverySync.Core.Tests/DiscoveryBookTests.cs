@@ -113,9 +113,9 @@ public sealed class DiscoveryBookTests : IDisposable
     {
         using SpreadsheetDocument doc = SpreadsheetDocument.Open(path, false);
         WorkbookPart wb = doc.WorkbookPart!;
-        Sheet s = wb.Workbook.Sheets!.Elements<Sheet>().First(x => x.Name == sheet);
+        Sheet s = wb.Workbook!.Sheets!.Elements<Sheet>().First(x => x.Name == sheet);
         WorksheetPart part = (WorksheetPart)wb.GetPartById(s.Id!.Value!);
-        Cell? cell = part.Worksheet.Descendants<Cell>().FirstOrDefault(c => c.CellReference?.Value == reference);
+        Cell? cell = part.Worksheet!.Descendants<Cell>().FirstOrDefault(c => c.CellReference?.Value == reference);
         return cell?.CloneNode(true) as Cell; // 檔案關閉後還能用
     }
 
@@ -174,7 +174,7 @@ public sealed class DiscoveryBookTests : IDisposable
         Assert.Null(CellAt(path, "All", "D2"));
         // 開檔時重新計算首頁的統計
         using SpreadsheetDocument doc = SpreadsheetDocument.Open(path, false);
-        Assert.True(doc.WorkbookPart!.Workbook.CalculationProperties!.FullCalculationOnLoad!.Value);
+        Assert.True(doc.WorkbookPart!.Workbook!.CalculationProperties!.FullCalculationOnLoad!.Value);
     }
 
     [Fact]
