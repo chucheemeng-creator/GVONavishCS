@@ -17,6 +17,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using GVODiscoverySync.Excel;
@@ -316,8 +317,9 @@ public sealed class NameMatcher
     // Excel 和遊戲寫法不同的名稱（不是同名組的結尾數字那種）：Excel 為了和別的分類區分加了註記，遊戲上沒有
     // （地理類也有一個「關島」，港口類的 Excel 就寫成「關島(港)」）。
     // 內容來自名稱對照表 GVODiscoverySync.NameAliases.json（見 MappingFile），使用者可以自己加。
-    // 整個程式共用一份（排序、字數這些靜態的方法也要用），換的時候整個換掉
-    private static Dictionary<string, string> _excelToGame = Aliases(MappingFile.BuiltInNameAliases);
+    // 整個程式共用一份（排序、字數這些靜態的方法也要用）：做好的對照表不再修改，換的時候整份換掉，
+    // volatile 讓其他執行緒馬上看到新的那一份，讀的人不會看到改到一半的內容
+    private static volatile Dictionary<string, string> _excelToGame = Aliases(MappingFile.BuiltInNameAliases);
 
     /// <summary>
     /// 換成新的名稱對照表（Excel 的寫法 → 遊戲上的寫法）。換了以後，已經建立的比對器要呼叫 RebuildNames。
@@ -503,7 +505,7 @@ public sealed class NameMatcher
     private static int NumberSuffix(string key)
     {
         string stripped = StripNumber(key);
-        return stripped.Length < key.Length && int.TryParse(key[stripped.Length..], out int n) ? n : 1;
+        return stripped.Length < key.Length && int.TryParse(key[stripped.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out int n) ? n : 1;
     }
 
     /// <summary>比對用的寫法：拿掉空白和標點，全形英數字轉半形，英文轉小寫。</summary>
