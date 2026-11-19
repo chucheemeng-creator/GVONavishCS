@@ -8,6 +8,7 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>GVODiscoverySync.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
@@ -16,6 +17,11 @@
     <!-- 讓這個專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 視窗左上角的圖示（exe 檔本身的圖示由上面的 ApplicationIcon 設定） -->
+    <EmbeddedResource Include="GVODiscoverySync.ico" LogicalName="GVODiscoverySync.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- 找遊戲視窗、截圖 -->
