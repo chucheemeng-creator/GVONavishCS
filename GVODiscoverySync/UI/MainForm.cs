@@ -124,6 +124,7 @@ public sealed partial class MainForm : Form
     {
         UpdateTitle();
         AutoScaleMode = AutoScaleMode.Dpi;
+        Icon = LoadAppIcon() ?? SystemIcons.Application;
         Font = new Font("Microsoft JhengHei UI", 9F);
         MinimumSize = new Size(640, 400);
         Size = new Size(820, 600);
@@ -1276,6 +1277,12 @@ public sealed partial class MainForm : Form
         _settings.Save();
         _glyphs.SaveIfDirty(force: true);
         base.OnFormClosing(e);
+    }
+
+    private static Icon? LoadAppIcon()
+    {
+        using Stream? stream = typeof(MainForm).Assembly.GetManifestResourceStream("GVODiscoverySync.ico");
+        return stream is null ? null : new Icon(stream);
     }
 
     protected override void Dispose(bool disposing)
