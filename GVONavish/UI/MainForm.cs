@@ -95,8 +95,7 @@ public class MainForm : Form
     private readonly bool _routesCanSave = true;      // routes.json 讀不出來又無法改名保留時是 false，不存檔
     private bool _routesSaveFailed;          // 上一次存航線失敗（狀態列顯示警告）
     private bool _planning;                  // 正在規劃中（避免同時按兩次）
-    private readonly System.Collections.Generic.List<PlannedRoute> _legs =
-        new System.Collections.Generic.List<PlannedRoute>(); // 規劃航線的每一段
+    private readonly System.Collections.Generic.List<PlannedRoute> _legs = []; // 規劃航線的每一段
     private double? _planAlong;       // 船在規劃航線上走到哪裡了（RouteProgress.Along）；航線改了就清掉
     private readonly WindMap? _wind = WindMap.Load(WindMap.DefaultPath); // 每個海域的季節風向；找不到 winds.bin 時是 null
     private Season _season;           // 用哪個季節的風向
@@ -105,7 +104,7 @@ public class MainForm : Form
     private bool _legsFromDialog;
     private bool _settingsApplied;    // 設定已經套用到畫面上了（之後存檔時才把畫面的狀態寫回設定）
     private RouteWind? _routeWind;      // 規劃航線在 _season 的風
-    private RouteWind? _routeWindOther; // 規劃航線在另一個季節的風（比較預計時間用）
+    private RouteWind? _routeWindOther; // 規劃航線在另一個季節的風（還沒讀到座標時比較兩季的逆風長度用）
     private ToolStripMenuItem _miPlanUndo = null!;
 
     /// <summary>規劃航線時，離港口這麼近就自動對準港口；座標標籤也用這個距離註明「附近」的港口（世界座標單位）。</summary>
@@ -316,7 +315,7 @@ public class MainForm : Form
         _mapView.ShowRoutes = _settings.ShowRoutes;
         _miRoutes.Checked = _settings.ShowRoutes;
         SetWindMode(_settings.Season, _settings.ConsiderWind);
-        SetSpeedCorner(Enum.IsDefined(typeof(ScreenCorner), _settings.SpeedCorner) ? _settings.SpeedCorner : ScreenCorner.TopRight);
+        SetSpeedCorner(Enum.IsDefined(_settings.SpeedCorner) ? _settings.SpeedCorner : ScreenCorner.TopRight);
         _mapView.SetFocus(_settings.LastX, _settings.LastY);
 
         // 船先放在上次關閉時的位置：在港口裡（沒有測量）也能直接從這裡規劃航線。
@@ -1362,27 +1361,23 @@ public class MainForm : Form
         RouteProgress? progress = _lastReadTime != 0 && _mapView.ShipPosition is WorldPoint ship
             ? RouteProgress.Measure(_legs, ship, _planAlong)
             : null;
-        // 另一個季節走別條路明顯比較快（地圖上的紫色虛線）
-        bool hasAlternate = _considerWind && _legs.Exists(leg => leg.Alternate is not null);
-        string alternateNote = hasAlternate ? $"；{otherName}走紫色的航線比較快" : "";
 
         if (progress is not RouteProgress now)
         {
             string wind = _routeWind is not null && _routeWindOther is not null
                 ? $"，逆風 {seasonName} {_routeWind.HeadwindLength:0}／{otherName} {_routeWindOther.HeadwindLength:0}"
                 : "";
-            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}{alternateNote}";
+            return $"規劃航線{legs}：{path}，距離 {length:0}{wind}";
         }
         _planAlong = now.Along;
 
         // 考慮風向以後，剩下的路相當於多遠（偏向逆風的航段船速變慢，所以會變長）。沒有風向資料時就是剩餘距離
-        double effective = now.Remaining, effectiveOther = now.Remaining;
+        double effective = now.Remaining;
         string text = $"規劃航線{legs}：{path}，剩餘 {now.Remaining:0}／全程 {now.Total:0}";
-        if (_routeWind is not null && _routeWindOther is not null)
+        if (_routeWind is not null)
         {
             (double headwind, double rest) = _routeWind.Remaining(now.Along);
             effective = now.OffRoute + rest;
-            effectiveOther = now.OffRoute + _routeWindOther.Remaining(now.Along).Effective;
             // 前面還有多長的逆風（已經走過的不算）；沒有就不顯示
             if (headwind >= 1) text += $"，前面還有逆風 {headwind:0}（{seasonName}）";
         }
@@ -1391,13 +1386,10 @@ public class MainForm : Form
         {
             // 目前的船速可能就是逆風下的船速：先換算回順風時的船速
             double baseSpeed = _speed.UnitsPerSecond / CurrentWindSpeedRatio();
+            // 只顯示目前選的季節：另一個季節的時間航行中用不到，狀態列也放不下
             text += $"，照目前船速約 {FormatDuration(effective / baseSpeed)}";
-            if (Math.Abs(effectiveOther - effective) > effective * 0.05)
-            {
-                text += $"（{otherName}約 {FormatDuration(effectiveOther / baseSpeed)}）";
-            }
         }
-        return text + alternateNote;
+        return text;
     }
 
     /// <summary>

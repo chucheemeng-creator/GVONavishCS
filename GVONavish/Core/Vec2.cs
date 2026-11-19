@@ -5,16 +5,10 @@ using System;
 
 namespace GVONavish.Core;
 
-public readonly struct Vec2
+public readonly struct Vec2(double x, double y)
 {
-    public double X { get; }
-    public double Y { get; }
-
-    public Vec2(double x, double y)
-    {
-        X = x;
-        Y = y;
-    }
+    public double X { get; } = x;
+    public double Y { get; } = y;
 
     /// <summary>從 a 到 b 的向量。X 方向走「比較近的那一邊」（世界左右相連）。</summary>
     public static Vec2 Between(WorldPoint a, WorldPoint b)
@@ -26,7 +20,7 @@ public readonly struct Vec2
 
     public bool IsZero => X == 0 && Y == 0;
 
-    public static Vec2 operator +(Vec2 a, Vec2 b) => new Vec2(a.X + b.X, a.Y + b.Y);
+    public static Vec2 operator +(Vec2 a, Vec2 b) => new(a.X + b.X, a.Y + b.Y);
 
     /// <summary>長度變成 1 的向量。長度為 0 時回傳 0 向量。</summary>
     public Vec2 Normalized()

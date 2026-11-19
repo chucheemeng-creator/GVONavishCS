@@ -183,7 +183,7 @@ public class RouteManagerForm : Form
         UpdateButtons();
     }
 
-    private void UpdateRow(ListViewItem item, ShipRoute r)
+    private static void UpdateRow(ListViewItem item, ShipRoute r)
     {
         if (item.Checked == r.Hidden) item.Checked = !r.Hidden;
         SetText(item, 0, r.Name);
