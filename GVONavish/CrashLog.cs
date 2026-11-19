@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace GVONavish;
 
@@ -16,7 +17,7 @@ public static class CrashLog
     /// <summary>單一檔案的大小上限（位元組）。</summary>
     public const long MaxBytes = 512 * 1024;
 
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
 
     /// <summary>加一筆紀錄。ex 是 null 時只寫說明。這個方法不會丟出例外。</summary>
     public static void Write(string message, Exception? ex = null)

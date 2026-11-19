@@ -61,9 +61,9 @@ public sealed class PlannedRoute
     public string EndName { get; set; } = "";
 }
 
-public sealed class RoutePlanner
+public sealed class RoutePlanner(SeaMap map)
 {
-    private readonly SeaMap _map;
+    private readonly SeaMap _map = map;
 
     // A* 用的陣列，重複使用；用「第幾次搜尋」的編號判斷資料是不是這一次的，不用每次清空。
     // 每一格的資料放在同一個結構裡：搜尋時讀一格的資料只要碰一次記憶體
@@ -75,7 +75,7 @@ public sealed class RoutePlanner
         public int Stamp;   // 第幾次搜尋用到的：run ＝ 這次碰過（待處理），-run ＝ 這次處理完了
     }
 
-    private readonly Node[] _nodes;
+    private readonly Node[] _nodes = new Node[map.Width * map.Height];
     private int _run;
 
     /// <summary>離海岸幾格以內要加成本（越近越貴）。</summary>
@@ -120,12 +120,6 @@ public sealed class RoutePlanner
     private Season _season;
     // 每個海域、每個方向（Moves 的順序）走一步要乘的倍數：1 ÷ 船速比例。最後一列（NoWind）都是 1
     private readonly float[,] _moveCost = new float[WindMap.NoWind + 1, 16];
-
-    public RoutePlanner(SeaMap map)
-    {
-        _map = map;
-        _nodes = new Node[map.Width * map.Height];
-    }
 
     /// <summary>
     /// 規劃兩個季節的航線：回傳 season 這一季最省時間的航線；
@@ -732,24 +726,24 @@ public sealed class RoutePlanner
     private bool Slide(List<(double X, double Y)> p, int k, (double X, double Y) a, (double X, double Y) b,
         bool towardPrevious, int need, double timeNow)
     {
-        var w = p[k];
+        var (X, Y) = p[k];
         var (towardX, towardY) = towardPrevious ? a : b;
         var other = towardPrevious ? b : a;
-        double dx = towardX - w.X, dy = towardY - w.Y;
+        double dx = towardX - X, dy = towardY - Y;
 
         // 二分法：最多滑到離目標點還有一點距離的地方（滑到底的話，這個轉折點就多餘了，由上面的檢查拿掉）
         double lo = 0, hi = 0.98;
         for (int it = 0; it < 12; it++)
         {
             double mid = (lo + hi) / 2;
-            var c = (X: w.X + dx * mid, Y: w.Y + dy * mid);
+            var c = (X: X + dx * mid, Y: Y + dy * mid);
             bool ok = LineIsClear(c, other, need)
                 && (_wind is null || LineTime(a, c) + LineTime(c, b) <= timeNow);
             if (ok) lo = mid;
             else hi = mid;
         }
         if (Math.Sqrt(dx * dx + dy * dy) * lo <= 0.25) return false;
-        p[k] = (w.X + dx * lo, w.Y + dy * lo);
+        p[k] = (X + dx * lo, Y + dy * lo);
         return true;
     }
 
