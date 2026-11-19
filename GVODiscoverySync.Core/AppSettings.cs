@@ -61,7 +61,11 @@ public class AppSettings
     };
 
     [JsonIgnore]
-    public static string FilePath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.json");
+    public static string FilePath => AppFolder.Default.PathOf("GVODiscoverySync.json");
+
+    // 這份設定讀自、存回的檔案
+    [JsonIgnore]
+    private string _path = "";
 
     /// <summary>讀設定檔時發生的問題（給主視窗顯示），沒有問題時是 null。</summary>
     [JsonIgnore]
@@ -77,44 +81,56 @@ public class AppSettings
         IntervalMs = Math.Clamp(IntervalMs, 100, 5000);
         OcrScale = double.IsFinite(OcrScale) ? Math.Clamp(OcrScale, 1.5, 6) : 3;
         Layout ??= new ListLayout();
-        if (Layout.RowHeight <= 0 || Layout.RowCount <= 0)
+        if (!Layout.IsValid)
         {
             Layout = new ListLayout();
         }
     }
 
-    public static AppSettings Load()
+    public static AppSettings Load(string? path = null)
     {
+        path ??= FilePath;
         try
         {
-            if (File.Exists(FilePath))
+            if (File.Exists(path))
             {
-                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOptions)
+                AppSettings settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), JsonOptions)
                     ?? throw new JsonException("設定檔內容是 null");
                 settings.Normalize();
+                settings._path = path;
                 return settings;
             }
         }
-        catch
+        catch (JsonException)
         {
-            string? backup = BrokenFile.Preserve(FilePath);
+            // 內容壞了：改名保留，從預設值開始
+            string? backup = BrokenFile.Preserve(path);
             if (backup is null)
             {
-                return new AppSettings
-                {
-                    SaveDisabled = true,
-                    LoadProblem = "設定檔 GVODiscoverySync.json 讀不出來，可能被其他程式鎖住了。\n\n" +
-                                  "這次先用預設值，而且不會儲存設定。請關掉程式，確認檔案沒被占用後再開一次。",
-                };
+                return Locked(path);
             }
             return new AppSettings
             {
-                LoadProblem = "設定檔 GVODiscoverySync.json 讀不出來，可能已經損壞。\n\n" +
+                _path = path,
+                LoadProblem = $"設定檔 {Path.GetFileName(path)} 讀不出來，可能已經損壞。\n\n" +
                               $"原本的檔案已改名保留為：\n{Path.GetFileName(backup)}\n\n設定已恢復成預設值。",
             };
         }
-        return new AppSettings();
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 讀不到（被其他程式鎖住、沒有權限）不代表內容壞了：不改名，這次也不存檔，免得蓋掉原檔
+            return Locked(path);
+        }
+        return new AppSettings { _path = path };
     }
+
+    private static AppSettings Locked(string path) => new()
+    {
+        _path = path,
+        SaveDisabled = true,
+        LoadProblem = $"設定檔 {Path.GetFileName(path)} 讀不出來，可能被其他程式鎖住了。\n\n" +
+                      "這次先用預設值，而且不會儲存設定。請關掉程式，確認檔案沒被占用後再開一次。",
+    };
 
     public void Save()
     {
@@ -124,9 +140,9 @@ public class AppSettings
         }
         try
         {
-            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, JsonOptions));
+            AtomicFile.WriteAllText(_path == "" ? FilePath : _path, JsonSerializer.Serialize(this, JsonOptions));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 存不了（例如放在唯讀資料夾）不影響使用
             System.Diagnostics.Debug.WriteLine("GVODiscoverySync.json 存檔失敗：" + ex);

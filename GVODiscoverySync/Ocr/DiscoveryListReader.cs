@@ -25,32 +25,6 @@ using Windows.Security.Cryptography;
 
 namespace GVODiscoverySync.Ocr;
 
-/// <summary>
-/// 清單上的一列。Index 是畫面上的第幾列（0 起算）。
-/// Readings 是用不同放大倍率讀到的結果（同一列換個倍率常常就讀對了，由呼叫端挑最像的）；Text 是第一個。
-/// 這一列有字、但怎麼讀都讀不出來時（常見於一、兩個字的短名稱，例如「蠶」），Readings 是空的、Text 是 ""。
-/// TextWidth 是這一列的字從畫面上量到的寬度（遊戲原本的像素，0 表示沒量到）。
-/// 清單的字型每個中文字一樣寬，所以就算辨識漏了字，也看得出名稱原本有幾個字。
-/// Glyphs 是這一列每一格（一個中文字寬）的字形，用來比對字形（見 Glyph）；讀不到時是 null。
-/// GlyphsExact：字形是不是逐點精確的。沒有放大顯示（縮放 1）時是；放大顯示（150% 等）時畫面是糊的，
-/// 每一格是「最像的已知字形」，不是百分之百可靠，只用來認出整列，不用來排除別的名稱、也不學。
-/// </summary>
-public sealed record ListRow(int Index, string Text, bool HasCard, IReadOnlyList<string> Readings, double TextWidth,
-    IReadOnlyList<Glyph>? Glyphs = null, bool GlyphsExact = true);
-
-/// <summary>一次辨識的結果。</summary>
-public sealed class ListSnapshot
-{
-    public string TitleText { get; init; } = "";
-    public List<ListRow> Rows { get; init; } = [];
-
-    /// <summary>標題是用幾倍放大讀到的（給除錯用）。</summary>
-    public double TitleScale { get; init; }
-
-    /// <summary>這一頁每一列都是用字形讀出來的，沒有做文字辨識（標題也沒讀，分類由清單內容判斷）。</summary>
-    public bool ByGlyphs { get; init; }
-}
-
 /// <summary>辨識前處理好的圖（BGRA，白底黑字，四周有白邊）。</summary>
 public sealed class PreparedImage
 {
@@ -227,7 +201,7 @@ public sealed class DiscoveryListReader
         // 有任何一列沒把握（有不認得的字、有英數字或括號、對不到名稱）就照原本的方式整頁做文字辨識。
         // 只在沒有放大顯示時用：放大顯示時的字形是「最像的」，不是精確的，要有文字辨識互相對照
         if (allConfident is not null && GlyphText is not null && Math.Abs(scale - 1) <= 0.001
-            && ReadByGlyphs(client, Layout, scale, GlyphText, SnapGlyph) is List<ListRow> byGlyphs && byGlyphs.Count > 0
+            && ReadByGlyphs(client, Layout, scale, GlyphText, SnapGlyph, _shiftHint) is List<ListRow> byGlyphs && byGlyphs.Count > 0
             && allConfident("", [.. byGlyphs.Select(r => (r.Text, r.TextWidth))]))
         {
             return new ListSnapshot { Rows = byGlyphs, ByGlyphs = true };
@@ -322,7 +296,7 @@ public sealed class DiscoveryListReader
         foreach ((int row, List<string> texts) in readings.OrderBy(p => p.Key))
         {
             rows.Add(new ListRow(row, texts.Count > 0 ? texts[0] : "", HasCardIcon(client, iconRect, row, Layout.RowHeight, scale), texts, Width(row),
-                ReadGlyphs(client, Layout, row, scale, Width(row), SnapGlyph), Math.Abs(scale - 1) <= 0.001));
+                ReadGlyphs(client, Layout, row, scale, Width(row), SnapGlyph, _shiftHint), Math.Abs(scale - 1) <= 0.001));
         }
         return new ListSnapshot { TitleText = title, Rows = rows, TitleScale = titleScale };
     }
@@ -331,7 +305,7 @@ public sealed class DiscoveryListReader
     /// 每一列都用字形讀出文字（glyphText：每個字都認得才有結果）；有任何一列讀不出來時回傳 null。空白列不算。
     /// </summary>
     public static List<ListRow>? ReadByGlyphs(Bitmap client, ListLayout layout, double scale,
-        Func<IReadOnlyList<Glyph>, string?> glyphText, Func<Glyph, Glyph>? snap = null)
+        Func<IReadOnlyList<Glyph>, string?> glyphText, Func<Glyph, Glyph>? snap = null, ScaledShiftHint? hint = null)
     {
         Rectangle listRect = ToScreen(layout.ListX, layout.ListY, layout.ListWidth, layout.ListHeight, client.Size, scale);
         List<ListRow> rows = [];
@@ -345,7 +319,7 @@ public sealed class DiscoveryListReader
                 continue; // 空白列
             }
             double width = MeasureTextWidth(client, rowRect, scale);
-            IReadOnlyList<Glyph>? cells = ReadGlyphs(client, layout, row, scale, width, snap);
+            IReadOnlyList<Glyph>? cells = ReadGlyphs(client, layout, row, scale, width, snap, hint);
             if (cells is null || glyphText(cells) is not string text)
             {
                 return null;
@@ -550,7 +524,7 @@ public sealed class DiscoveryListReader
     /// （沒有 snap、或放大倍率太小（125%：一個點寬的筆畫會糊到取樣不到）時回傳 null）。
     /// </summary>
     public static IReadOnlyList<Glyph>? ReadGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
-        Func<Glyph, Glyph>? snap = null)
+        Func<Glyph, Glyph>? snap = null, ScaledShiftHint? hint = null)
     {
         if (textWidth <= 0)
         {
@@ -558,7 +532,7 @@ public sealed class DiscoveryListReader
         }
         if (Math.Abs(scale - 1) > 0.001)
         {
-            return snap is null || scale < 1.45 ? null : ReadScaledGlyphs(client, layout, row, scale, textWidth, snap);
+            return snap is null || scale < 1.45 ? null : ReadScaledGlyphs(client, layout, row, scale, textWidth, snap, hint);
         }
         int count = (int)Math.Round((textWidth + 2) / Glyph.Width);
         Rectangle list = ToScreen(layout.ListX, layout.ListY, layout.ListWidth, layout.ListHeight, client.Size, scale);
@@ -591,14 +565,22 @@ public sealed class DiscoveryListReader
     private static readonly (int Dx, int Dy)[] ScaledShifts =
         [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
 
-    // 上一次每一格都認得的位置
-    private static (int Dx, int Dy) _lastShift = (0, 0);
+    /// <summary>
+    /// 放大顯示時，上一次每一格都認得的取樣位置（同一個視窗的位置不會變，下次先試它，通常第一次就中）。
+    /// 讀取器自己持有一份；沒給的話（例如測試）每次都照固定的順序試，結果不受之前讀過什麼影響。
+    /// </summary>
+    public sealed class ScaledShiftHint
+    {
+        public (int Dx, int Dy) Last { get; set; }
+    }
+
+    private readonly ScaledShiftHint _shiftHint = new();
 
     // 放大顯示時讀字形：遊戲的每個像素被放大成 scale 個螢幕像素，在它的中心取樣（中心那一點最不受旁邊的像素影響）。
     // 遊戲畫面對到螢幕像素的位置可能差一個像素（視窗位置、邊框寬度不同），所以差一個像素的幾種位置都試，
     // 用認得出最多格的那一種
     private static List<Glyph>? ReadScaledGlyphs(Bitmap client, ListLayout layout, int row, double scale, double textWidth,
-        Func<Glyph, Glyph> snap)
+        Func<Glyph, Glyph> snap, ScaledShiftHint? hint)
     {
         int count = (int)Math.Round((textWidth + 2) / Glyph.Width);
         if (count < 1 || GlyphOriginX + count * Glyph.Width > layout.ListWidth)
@@ -621,8 +603,14 @@ public sealed class DiscoveryListReader
         List<Glyph>? best = null;
         int bestKnown = -1;
         // 上一次每一格都認得的位置先試（同一個視窗的位置不會變，通常第一次就中）
-        foreach ((int dx, int dy) in ScaledShifts.OrderBy(s => s == _lastShift ? 0 : 1))
+        (int Dx, int Dy) first = hint?.Last ?? (0, 0);
+        for (int attempt = -1; attempt < ScaledShifts.Length; attempt++)
         {
+            (int dx, int dy) = attempt < 0 ? first : ScaledShifts[attempt];
+            if (attempt >= 0 && (dx, dy) == first)
+            {
+                continue; // 已經先試過了
+            }
             List<Glyph> glyphs = [];
             for (int i = 0; i < count; i++)
             {
@@ -650,7 +638,10 @@ public sealed class DiscoveryListReader
             }
             if (known == count)
             {
-                _lastShift = (dx, dy);
+                if (hint is not null)
+                {
+                    hint.Last = (dx, dy);
+                }
                 break; // 每一格都認得：就是這個位置
             }
         }

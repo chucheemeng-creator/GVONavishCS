@@ -37,7 +37,7 @@ public enum GlyphVerdict
 
 public sealed class GlyphStore
 {
-    public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "GVODiscoverySync.Glyphs.json");
+    public static string DefaultPath => AppFolder.Default.PathOf("GVODiscoverySync.Glyphs.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -419,12 +419,19 @@ public sealed class GlyphStore
     private string Saved(char c)
         => string.Join('|', new[] { _glyphs[c] }.Concat(_variants.TryGetValue(c, out List<Glyph>? others) ? others : []));
 
+    // 存檔失敗之後，這個時間以前不再試（每讀一頁就試一次、每次都失敗沒有意義）
+    private DateTime _retryAfter = DateTime.MinValue;
+
+    /// <summary>上一次存檔失敗的原因；成功、或還沒存過時是 null。</summary>
+    public string? SaveError { get; private set; }
+
     /// <summary>
-    /// 有學到新的字形才存檔（只存內建沒有、或和內建不同的字）。存不了（例如唯讀資料夾）就算了，這次執行照樣能用。
+    /// 有學到新的字形才存檔（只存內建沒有、或和內建不同的字）。存不了（例如唯讀資料夾）就算了，這次執行照樣能用，
+    /// 失敗後 30 秒內不再試（force＝true 時照試，關閉程式時用）。
     /// </summary>
-    public void SaveIfDirty(string? path = null)
+    public void SaveIfDirty(string? path = null, bool force = false)
     {
-        if (!Dirty)
+        if (!Dirty || (!force && DateTime.UtcNow < _retryAfter))
         {
             return;
         }
@@ -435,10 +442,12 @@ public sealed class GlyphStore
                 .ToDictionary(p => p.Key.ToString(), p => Saved(p.Key));
             AtomicFile.WriteAllText(path ?? DefaultPath, JsonSerializer.Serialize(saved, JsonOptions));
             Dirty = false;
+            SaveError = null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // 存不了：下次再試
+            SaveError = ex.Message; // 存不了：稍後再試
+            _retryAfter = DateTime.UtcNow.AddSeconds(30);
         }
     }
 }

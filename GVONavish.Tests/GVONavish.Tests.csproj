@@ -5,6 +5,7 @@
     <Version>1.0.0</Version>
     <!-- 和 GVONavish 一樣的目標框架，才能直接引用它 -->
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <AssemblyName>GVONavish.Tests</AssemblyName>

@@ -5,6 +5,7 @@
     <Version>1.0.0</Version>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>GVONavish</AssemblyName>
     <RootNamespace>GVONavish</RootNamespace>
     <!-- exe 檔、工作列、檔案總管顯示的圖示 -->

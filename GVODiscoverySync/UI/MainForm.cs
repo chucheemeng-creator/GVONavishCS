@@ -54,6 +54,8 @@ public sealed partial class MainForm : Form
 
 
     private bool _busy;
+    // 程式旁邊不能寫入、第一次改用備用資料夾：啟動時說明一次
+    private readonly bool _showFolderNotice;
     // 視窗正在關閉：還在跑的辨識回來後不要再碰畫面
     private bool _closing;
     // 寫入 Excel、手動指定進行中（包括等辨識結束、對話框開著的時候）：
@@ -96,6 +98,7 @@ public sealed partial class MainForm : Form
         // 還沒有設定檔時先寫一份預設的（放在程式資料夾），方便直接編輯錯字對照表等設定
         if (!File.Exists(AppSettings.FilePath))
         {
+            _showFolderNotice = AppFolder.Default.UsingFallback; // 第一次用備用的資料夾時說明一次，之後不再跳
             settings.Save();
         }
         _reader = DiscoveryListReader.TryCreate(settings.Layout);
@@ -260,6 +263,12 @@ public sealed partial class MainForm : Form
         if (_settings.LoadProblem is not null)
         {
             MessageBox.Show(this, _settings.LoadProblem, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        if (_showFolderNotice)
+        {
+            MessageBox.Show(this,
+                "程式所在的資料夾不能寫入（例如裝在 Program Files），設定、學到的字形、錯字對照表、名稱對照表改存在：\n\n" +
+                AppFolder.Default.FolderPath, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         if (_confusionProblem is not null)
         {
@@ -458,11 +467,10 @@ public sealed partial class MainForm : Form
                 _book.ReloadMarks();
                 RefreshAllRows();
                 UpdateSummary();
-                string backupNote = ex.FileMayBeModified
-                    ? $"存檔途中出錯，原檔可能已經部分改動（甚至損壞）。\n請關閉程式，用寫入前的備份蓋回原檔：\n{ex.BackupPath}"
-                    : ex.BackupPath == ""
-                        ? "（還沒開始備份，原檔沒有被改動）"
-                        : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
+                // 改的是複本、存好才換掉原檔，所以失敗時原檔一定沒被動到
+                string backupNote = ex.BackupPath == ""
+                    ? "（還沒開始備份，原檔沒有被改動）"
+                    : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
                 MessageBox.Show(this, $"寫入失敗：\n\n{ex.Message}\n\n{backupNote}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -1266,7 +1274,7 @@ public sealed partial class MainForm : Form
         _settings.WindowHeight = bounds.Height;
         _settings.Character = Character;
         _settings.Save();
-        _glyphs.SaveIfDirty();
+        _glyphs.SaveIfDirty(force: true);
         base.OnFormClosing(e);
     }
 

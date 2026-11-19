@@ -18,18 +18,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 找遊戲視窗、截圖、安全存檔 -->
+    <!-- 找遊戲視窗、截圖 -->
     <ProjectReference Include="..\GVO.Common\GVO.Common.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- 內建的字形表（比對字形用；掃過所有分類學到的 1849 個字，包在 exe 裡） -->
-    <EmbeddedResource Include="BuiltInGlyphs.json" LogicalName="BuiltInGlyphs.json" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- 直接改 xlsx 裡面的儲存格，其他內容（格式化條件、表格、註解）原封不動 -->
-    <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
+    <!-- Excel 讀寫、名稱比對、字形、讀取結果的推斷規則（不依賴 Windows） -->
+    <ProjectReference Include="..\GVODiscoverySync.Core\GVODiscoverySync.Core.csproj" />
   </ItemGroup>
 
 </Project>

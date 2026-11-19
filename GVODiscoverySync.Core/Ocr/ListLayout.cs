@@ -31,4 +31,9 @@ public sealed class ListLayout
 
     [JsonIgnore]
     public int ListHeight => RowHeight * RowCount;
+
+    /// <summary>設定檔裡的版面數值合不合理（寬高都要是正的，列高、列數有上限，免得手改錯造成配置巨大的陣列）。</summary>
+    [JsonIgnore]
+    public bool IsValid => TitleWidth > 0 && TitleHeight > 0 && ListWidth > 0 && IconWidth > 0
+                           && RowHeight is > 0 and <= 200 && RowCount is > 0 and <= 50;
 }
