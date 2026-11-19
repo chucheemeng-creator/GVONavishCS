@@ -16,6 +16,7 @@ using System.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
+using GVO.Common.IO;
 
 namespace GVODiscoverySync.Excel;
 
@@ -257,7 +258,7 @@ public sealed class DiscoveryBook
     /// 安全措施：
     ///   - 每一列寫入前核對 C 欄的名稱還是不是這個發現物（讀檔之後在 Excel 插列、排序、換版本，列號就不對了）；
     ///     不一致的跳過，列在回傳結果的 Skipped 裡
-    ///   - 不自動存檔：全部改完才存一次，中途出錯就不存，原檔不動
+    ///   - 改的是複本：全部改完、存好之後才用 File.Replace 換掉原檔，中途出錯、當機、斷電，原檔都不會被動到
     ///   - 確定存好之後才把記憶體裡的 Marked 改成 true
     /// 失敗時丟出 ExcelWriteException（帶著備份檔路徑，備份還沒做好時是 ""）。
     /// </summary>
@@ -269,7 +270,6 @@ public sealed class DiscoveryBook
         }
 
         string backup = "";
-        bool saving = false; // 開始存檔之後才出錯的話，原檔可能已經寫了一部分
         try
         {
             EnsureNotOpenElsewhere();
@@ -289,8 +289,11 @@ public sealed class DiscoveryBook
 
             List<DiscoveryItem> written = [];
             List<DiscoveryItem> skipped = [];
-            using (SpreadsheetDocument doc = SpreadsheetDocument.Open(FilePath, true, new OpenSettings { AutoSave = false }))
+            // 改的是複本，全部改完存好之後才換掉原檔（File.Replace）：中途出錯、當機、斷電，原檔都不會被動到
+            AtomicFile.Write(FilePath, tmp =>
             {
+                File.Copy(FilePath, tmp, true);
+                using SpreadsheetDocument doc = SpreadsheetDocument.Open(tmp, true, new OpenSettings { AutoSave = false });
                 WorkbookPart wbPart = doc.WorkbookPart ?? throw new InvalidDataException("這不是有效的 Excel 檔案。");
                 List<string> strings = ReadSharedStrings(wbPart);
                 foreach (IGrouping<string, DiscoveryItem> group in items.GroupBy(i => i.Category))
@@ -343,9 +346,8 @@ public sealed class DiscoveryBook
                 workbook.CalculationProperties ??= new CalculationProperties();
                 workbook.CalculationProperties.FullCalculationOnLoad = true;
 
-                saving = true;
                 doc.Save(); // 全部改完才存
-            }
+            });
 
             // 確定存好了，才更新記憶體
             foreach (DiscoveryItem item in written)
@@ -356,7 +358,7 @@ public sealed class DiscoveryBook
         }
         catch (Exception ex) when (ex is not ExcelWriteException)
         {
-            throw new ExcelWriteException(ex.Message, backup, saving, ex);
+            throw new ExcelWriteException(ex.Message, backup, ex);
         }
     }
 
@@ -539,14 +541,11 @@ public sealed class DiscoveryBook
 public sealed record WriteResult(string BackupPath, IReadOnlyList<DiscoveryItem> Written, IReadOnlyList<DiscoveryItem> Skipped);
 
 /// <summary>
-/// 寫入 Excel 失敗。BackupPath 是已經做好的備份（還沒做好時是 ""）。
-/// FileMayBeModified：存檔途中才出錯，原檔可能已經寫了一部分（可能損壞），要用備份還原；
-/// false 時是存檔之前就出錯，原檔沒有被改動。
+/// 寫入 Excel 失敗。原檔不會被動到（改的是複本，存好才換掉原檔）。
+/// BackupPath 是已經做好的備份（還沒做好時是 ""）。
 /// </summary>
-public sealed class ExcelWriteException(string message, string backupPath, bool fileMayBeModified, Exception inner)
+public sealed class ExcelWriteException(string message, string backupPath, Exception inner)
     : IOException(message, inner)
 {
     public string BackupPath { get; } = backupPath;
-
-    public bool FileMayBeModified { get; } = fileMayBeModified;
 }

@@ -458,11 +458,10 @@ public sealed partial class MainForm : Form
                 _book.ReloadMarks();
                 RefreshAllRows();
                 UpdateSummary();
-                string backupNote = ex.FileMayBeModified
-                    ? $"存檔途中出錯，原檔可能已經部分改動（甚至損壞）。\n請關閉程式，用寫入前的備份蓋回原檔：\n{ex.BackupPath}"
-                    : ex.BackupPath == ""
-                        ? "（還沒開始備份，原檔沒有被改動）"
-                        : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
+                // 改的是複本、存好才換掉原檔，所以失敗時原檔一定沒被動到
+                string backupNote = ex.BackupPath == ""
+                    ? "（還沒開始備份，原檔沒有被改動）"
+                    : $"原檔沒有被改動。寫入前的備份在：\n{ex.BackupPath}";
                 MessageBox.Show(this, $"寫入失敗：\n\n{ex.Message}\n\n{backupNote}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
