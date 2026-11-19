@@ -51,6 +51,16 @@
 - [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)（v0.9.6 以前的版本用 .NET 8）
 - 《大航海時代 Online》，以視窗模式執行
 
+## 安裝
+
+1. 到 [Releases](../../releases) 下載 `GVONavish-v版本號-win-x64.zip`。
+2. **先解除封鎖，再解壓縮**：在 zip 檔上按右鍵 → 內容，勾選下方的「解除封鎖」，按確定。
+   從網路下載的檔案會被 Windows 標記，沒有解除封鎖時，雙擊 `GVONavish.exe` 可能完全沒有反應，也沒有任何訊息。
+3. 把整個壓縮檔解壓縮到一個資料夾（不要在壓縮檔裡直接雙擊 exe）。`GVONavish.exe`、`map.png`、`seamask.bin`、`winds.bin` 要放在同一個資料夾。
+4. 雙擊 `GVONavish.exe`。
+
+還是沒有反應時：按 `Ctrl+Shift+Esc` 開工作管理員，看看是不是已經有 `GVONavish.exe` 在執行（程式只允許同時開一個）。
+
 ## 編譯
 
 需要 Visual Studio 2026（含「.NET 桌面開發」工作負載），或 .NET 10 SDK。
