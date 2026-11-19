@@ -92,7 +92,7 @@ public sealed class DiscoveryBook
         WorkbookPart wbPart = doc.WorkbookPart ?? throw new InvalidDataException("這不是有效的 Excel 檔案。");
         List<string> strings = ReadSharedStrings(wbPart);
 
-        foreach (Sheet sheet in wbPart.Workbook.Sheets?.Elements<Sheet>() ?? [])
+        foreach (Sheet sheet in wbPart.Workbook?.Sheets?.Elements<Sheet>() ?? [])
         {
             string category = sheet.Name?.Value ?? "";
             if (category == "" || sheet.Id?.Value is not string relId)
@@ -342,7 +342,7 @@ public sealed class DiscoveryBook
                 }
 
                 // 打開檔案時重新計算，首頁的發現數、功績才會更新
-                Workbook workbook = wbPart.Workbook;
+                Workbook workbook = wbPart.Workbook ?? throw new InvalidDataException("這不是有效的 Excel 檔案。");
                 workbook.CalculationProperties ??= new CalculationProperties();
                 workbook.CalculationProperties.FullCalculationOnLoad = true;
 
@@ -443,7 +443,7 @@ public sealed class DiscoveryBook
 
     private static SheetData? FindSheetData(WorkbookPart wbPart, string sheetName)
     {
-        Sheet? sheet = wbPart.Workbook.Sheets?.Elements<Sheet>().FirstOrDefault(s => s.Name?.Value == sheetName);
+        Sheet? sheet = wbPart.Workbook?.Sheets?.Elements<Sheet>().FirstOrDefault(s => s.Name?.Value == sheetName);
         if (sheet?.Id?.Value is not string relId || wbPart.GetPartById(relId) is not WorksheetPart wsPart)
         {
             return null;
