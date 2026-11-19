@@ -373,9 +373,10 @@ public sealed class DiscoveryBook
         {
             fresh = Load(FilePath);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                                       or OpenXmlPackageException or FileFormatException)
         {
-            return;
+            return; // 讀不出來（被鎖住、檔案壞了）：維持原狀
         }
         foreach ((string category, List<DiscoveryItem> items) in Categories)
         {

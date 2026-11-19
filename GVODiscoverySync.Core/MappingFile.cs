@@ -93,9 +93,9 @@ public sealed class MappingFile
     private readonly string _title; // 訊息用的名稱：錯字對照表、名稱對照表
     private readonly string[] _header;
 
-    private MappingFile(string fileName, IReadOnlyDictionary<string, string> builtIn, string title, string[] header)
+    private MappingFile(AppFolder folder, string fileName, IReadOnlyDictionary<string, string> builtIn, string title, string[] header)
     {
-        FilePath = Path.Combine(AppContext.BaseDirectory, fileName);
+        FilePath = folder.PathOf(fileName);
         _builtIn = builtIn;
         _title = title;
         _header = header;
@@ -119,14 +119,15 @@ public sealed class MappingFile
     /// 讀取錯字對照表。檔案還不存在時建立一份：內容是內建的錯字，加上舊版設定檔裡的（oldSettings，搬過來）。
     /// 回傳的 Migrated 表示舊設定檔的內容已經安全寫進新檔案，可以從設定檔拿掉了。
     /// </summary>
-    public static (MappingFile Table, bool Migrated, string? Problem) LoadConfusions(IReadOnlyDictionary<string, string>? oldSettings)
-        => new MappingFile("GVODiscoverySync.OcrConfusions.json", BuiltInConfusions, "錯字對照表", ConfusionsHeader).Load(oldSettings);
+    public static (MappingFile Table, bool Migrated, string? Problem) LoadConfusions(IReadOnlyDictionary<string, string>? oldSettings,
+        AppFolder? folder = null)
+        => new MappingFile(folder ?? AppFolder.Default, "GVODiscoverySync.OcrConfusions.json", BuiltInConfusions, "錯字對照表", ConfusionsHeader).Load(oldSettings);
 
     /// <summary>讀取名稱對照表（Excel 的寫法 → 遊戲上的寫法）。檔案還不存在時建立一份，內容是內建的。</summary>
-    public static (MappingFile Table, string? Problem) LoadNameAliases()
+    public static (MappingFile Table, string? Problem) LoadNameAliases(AppFolder? folder = null)
     {
         (MappingFile table, _, string? problem) =
-            new MappingFile("GVODiscoverySync.NameAliases.json", BuiltInNameAliases, "名稱對照表", NameAliasesHeader).Load(null);
+            new MappingFile(folder ?? AppFolder.Default, "GVODiscoverySync.NameAliases.json", BuiltInNameAliases, "名稱對照表", NameAliasesHeader).Load(null);
         return (table, problem);
     }
 
@@ -146,7 +147,7 @@ public sealed class MappingFile
                 AtomicFile.WriteAllText(FilePath, Template(initial));
                 migrated = true;
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // 存不了（例如放在唯讀資料夾）：這次直接用記憶體裡的，舊設定檔的內容也先留著
                 table.Map = initial;
@@ -172,7 +173,7 @@ public sealed class MappingFile
         {
             write = File.Exists(FilePath) ? File.GetLastWriteTimeUtc(FilePath) : DateTime.MinValue;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
@@ -212,7 +213,7 @@ public sealed class MappingFile
             {
                 _lastWrite = File.GetLastWriteTimeUtc(FilePath);
             }
-            catch
+            catch (Exception inner) when (inner is IOException or UnauthorizedAccessException)
             {
                 // 讀不到修改時間：下次再試
             }
