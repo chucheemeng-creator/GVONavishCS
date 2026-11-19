@@ -20,11 +20,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GVONavish.Core;
 
 /// <summary>規劃好的航線。</summary>
-public class PlannedRoute
+public sealed class PlannedRoute
 {
     /// <summary>
     /// 轉折點（世界座標）。X 是「攤開」的座標：跨過地圖邊界時不折回，維持連續，畫圖時直接用。
@@ -60,15 +61,21 @@ public class PlannedRoute
     public string EndName { get; set; } = "";
 }
 
-public class RoutePlanner
+public sealed class RoutePlanner
 {
     private readonly SeaMap _map;
 
-    // A* 用的陣列，重複使用；用「第幾次搜尋」的編號判斷資料是不是這一次的，不用每次清空
-    private readonly float[] _g;
-    private readonly int[] _parent;
-    private readonly int[] _stamp;
-    private readonly bool[] _closed;
+    // A* 用的陣列，重複使用；用「第幾次搜尋」的編號判斷資料是不是這一次的，不用每次清空。
+    // 每一格的資料放在同一個結構裡：搜尋時讀一格的資料只要碰一次記憶體
+    // （分成好幾個 840 萬格的陣列時，每展開一個節點就是好幾次快取失誤，實測是搜尋慢的主因）。
+    private struct Node
+    {
+        public float G;     // 從起點走到這一格的成本
+        public int Parent;  // 從哪一格走來
+        public int Stamp;   // 第幾次搜尋用到的：run ＝ 這次碰過（待處理），-run ＝ 這次處理完了
+    }
+
+    private readonly Node[] _nodes;
     private int _run;
 
     /// <summary>離海岸幾格以內要加成本（越近越貴）。</summary>
@@ -84,6 +91,27 @@ public class RoutePlanner
     /// </summary>
     private const double SmoothTimeSlack = 1.03;
 
+    /// <summary>
+    /// 起點和終點的距離（世界座標單位）超過這麼遠，<see cref="PlanBothSeasons"/> 的三次搜尋才同時跑。
+    /// 實測在這個距離以下，一次搜尋不到 30 毫秒，配置另外兩份搜尋資料（各約 100 MB）的時間比省下的還多。
+    /// </summary>
+    private const double ParallelMinDistance = 2000;
+
+    // 平行搜尋用的另外兩份搜尋資料（各約 100 MB）。只用弱參考留著：連續規劃時可以重複使用，
+    // 記憶體吃緊時系統會回收，閒置時不會一直多佔 200 MB
+    private WeakReference<RoutePlanner>? _helper2, _helper3;
+
+    private RoutePlanner Helper(ref WeakReference<RoutePlanner>? slot)
+    {
+        if (slot is not null && slot.TryGetTarget(out RoutePlanner? existing))
+        {
+            return existing;
+        }
+        RoutePlanner created = new(_map);
+        slot = new WeakReference<RoutePlanner>(created);
+        return created;
+    }
+
     /// <summary>另一個季節的航線要比原本的航線省這麼多時間（3%），才值得另外畫出來。</summary>
     public const double AlternateMinSaving = 0.03;
 
@@ -96,11 +124,7 @@ public class RoutePlanner
     public RoutePlanner(SeaMap map)
     {
         _map = map;
-        int n = map.Width * map.Height;
-        _g = new float[n];
-        _parent = new int[n];
-        _stamp = new int[n];
-        _closed = new bool[n];
+        _nodes = new Node[map.Width * map.Height];
     }
 
     /// <summary>
@@ -110,12 +134,30 @@ public class RoutePlanner
     /// </summary>
     public PlannedRoute? PlanBothSeasons(WorldPoint start, WorldPoint end, WindMap wind, Season season)
     {
-        PlannedRoute? shortest = PlanOnce(start, end, null, season);
+        Season otherSeason = season == Season.Summer ? Season.Winter : Season.Summer;
+        PlannedRoute? shortest, routeCandidate, otherCandidate;
+
+        if (World.Distance(start, end) >= ParallelMinDistance)
+        {
+            // 長距離的航線：三次搜尋互相獨立，同時跑（各自用自己的搜尋資料，所以另外兩份要另外準備）。
+            // 短的航線一次搜尋只要幾十毫秒，配置另外兩份大陣列反而比較慢，照順序跑
+            RoutePlanner second = Helper(ref _helper2), third = Helper(ref _helper3);
+            shortest = routeCandidate = otherCandidate = null;
+            Parallel.Invoke(
+                () => shortest = PlanOnce(start, end, null, season),
+                () => routeCandidate = second.PlanOnce(start, end, wind, season),
+                () => otherCandidate = third.PlanOnce(start, end, wind, otherSeason));
+        }
+        else
+        {
+            shortest = PlanOnce(start, end, null, season);
+            routeCandidate = shortest is null ? null : PlanOnce(start, end, wind, season);
+            otherCandidate = shortest is null ? null : PlanOnce(start, end, wind, otherSeason);
+        }
         if (shortest is null) return null;
 
-        Season otherSeason = season == Season.Summer ? Season.Winter : Season.Summer;
-        PlannedRoute route = Fastest(start, end, wind, season, shortest);
-        PlannedRoute other = Fastest(start, end, wind, otherSeason, shortest);
+        PlannedRoute route = Fastest(shortest, routeCandidate, wind, season);
+        PlannedRoute other = Fastest(shortest, otherCandidate, wind, otherSeason);
         if (!ReferenceEquals(route, other)
             && EffectiveLength(other, wind, otherSeason) < EffectiveLength(route, wind, otherSeason) * (1 - AlternateMinSaving))
         {
@@ -133,19 +175,18 @@ public class RoutePlanner
     {
         PlannedRoute? shortest = PlanOnce(start, end, null, season);
         if (shortest is null || wind is null) return shortest;
-        return Fastest(start, end, wind, season, shortest);
+        return Fastest(shortest, PlanOnce(start, end, wind, season), wind, season);
     }
 
-    // 這一季最省時間的航線。
+    // 這一季最省時間的航線（candidate 是考慮風向搜尋出來的）。
     // 拉直的時候為了少幾個轉折點，可以比方格上的路徑慢一點；萬一因此沒有比「最短的航線」快，就用最短的那一條
-    private PlannedRoute Fastest(WorldPoint start, WorldPoint end, WindMap wind, Season season, PlannedRoute shortest)
+    private static PlannedRoute Fastest(PlannedRoute shortest, PlannedRoute? candidate, WindMap wind, Season season)
     {
-        PlannedRoute? route = PlanOnce(start, end, wind, season);
-        if (route is null || EffectiveLength(shortest, wind, season) <= EffectiveLength(route, wind, season))
+        if (candidate is null || EffectiveLength(shortest, wind, season) <= EffectiveLength(candidate, wind, season))
         {
             return shortest;
         }
-        return route;
+        return candidate;
     }
 
     // 考慮風向以後，這條航線相當於多遠（＝需要的時間）
@@ -264,64 +305,121 @@ public class RoutePlanner
         _run++;
         if (_run == int.MaxValue)
         {
-            Array.Clear(_stamp, 0, _stamp.Length);
+            Array.Clear(_nodes);
             _run = 1;
         }
 
-        PriorityQueue<int, float> open = new();
-        Touch(start);
-        _g[start] = 0;
-        _parent[start] = -1;
+        // 熱迴圈裡用到的陣列、欄位先放進區域變數：編譯器沒辦法確定它們不會被改掉，欄位和屬性每次都要重新讀
+        int run = _run;
+        bool[] isSea = _map.IsSea;
+        byte[] coastDistance = _map.CoastDistance;
+        Node[] nodes = _nodes;
+        float[,] moveCost = _moveCost;
+        (int Dx, int Dy, float Len)[] moves = Moves;
+        byte[]? areas = AreaTable();
+
+        PriorityQueue<int, float> open = _open;
+        open.Clear();
+        nodes[start] = new Node { G = 0, Parent = -1, Stamp = run };
         open.Enqueue(start, Heuristic(start % w, start / w, gx, gy));
 
         while (open.Count > 0)
         {
             int cur = open.Dequeue();
-            if (_closed[cur])
+            if (nodes[cur].Stamp == -run)
             {
                 continue; // 同一格可能排進去好幾次，只處理最早的那次
             }
-            _closed[cur] = true;
+            nodes[cur].Stamp = -run;
             if (cur == goal)
             {
                 List<int> path = [];
-                for (int c = goal; c != -1; c = _parent[c]) path.Add(c);
+                for (int c = goal; c != -1; c = nodes[c].Parent) path.Add(c);
                 path.Reverse();
                 return path;
             }
 
-            int cx = cur % w, cy = cur / w;
-            float gCur = _g[cur];
-            int area = AreaOfCell(cx, cy); // 這一格的風向，往 16 個方向走都用它
-            for (int m = 0; m < Moves.Length; m++)
+            int cy = cur / w;
+            int cx = cur - cy * w;
+            float gCur = nodes[cur].G;
+            int area = areas is null ? WindMap.NoWind : areas[cur]; // 這一格的風向，往 16 個方向走都用它
+            // 離邊界 2 格以上：不會跨過地圖邊界，也不會超出上下範圍，可以直接用索引算
+            bool interior = cx >= 2 && cx < w - 2 && cy >= 2 && cy < h - 2;
+            for (int m = 0; m < moves.Length; m++)
             {
-                (int dx, int dy, float len) = Moves[m];
-                int ny = cy + dy;
-                if (ny < 0 || ny >= h) continue;
-                int nx = cx + dx;
-                if (nx < 0) nx += w; else if (nx >= w) nx -= w;
-                int next = ny * w + nx;
-                if (!_map.IsSea[next]) continue;
+                (int dx, int dy, float len) = moves[m];
+                int next;
+                int nx, ny;
+                if (interior)
+                {
+                    nx = cx + dx;
+                    ny = cy + dy;
+                    next = cur + dy * w + dx;
+                }
+                else
+                {
+                    ny = cy + dy;
+                    if (ny < 0 || ny >= h) continue;
+                    nx = cx + dx;
+                    if (nx < 0) nx += w; else if (nx >= w) nx -= w;
+                    next = ny * w + nx;
+                }
+                int coast = coastDistance[next];
+                if (coast == 0) continue; // 離海岸 0 格＝陸地（海的格子至少是 1）
 
                 // 不能從陸地的縫隙穿過去：斜走、跳兩格時，經過的格子也必須是海
-                if (dx != 0 && dy != 0 && !PassIsClear(cx, cy, dx, dy)) continue;
+                if (dx != 0 && dy != 0 && !(interior ? PassIsClearInterior(isSea, w, cur, dx, dy) : PassIsClear(cx, cy, dx, dy))) continue;
 
-                Touch(next);
-                if (_closed[next]) continue;
-
-                int coast = _map.CoastDistance[next];
-                float penalty = coast < CoastPenalty.Length ? CoastPenalty[coast] : 0f;
-                float g = gCur + len * (1f + penalty) * _moveCost[area, m];
-                if (g < _g[next])
+                ref Node node = ref nodes[next];
+                if (node.Stamp == -run)
                 {
-                    _g[next] = g;
-                    _parent[next] = cur;
+                    continue; // 這次已經處理完了
+                }
+                if (node.Stamp != run) // 第一次碰到這一格：初始化它的資料
+                {
+                    node.Stamp = run;
+                    node.G = float.MaxValue;
+                }
+
+                float penalty = coast < CoastPenalty.Length ? CoastPenalty[coast] : 0f;
+                float g = gCur + len * (1f + penalty) * moveCost[area, m];
+                if (g < node.G)
+                {
+                    node.G = g;
+                    node.Parent = cur;
                     open.Enqueue(next, g + Heuristic(nx, ny, gx, gy));
                 }
             }
         }
         return null;
     }
+
+    // 目前的風向資料對應的「每一格屬於哪個海域」表（byte × 4096 × 2048 ＝ 8 MB）。
+    // 第一次用到某份風向資料時才建，同一份資料之後都重複使用；不考慮風向時是 null（全部當成 NoWind）。
+    private byte[]? AreaTable()
+    {
+        if (_wind is null) return null;
+        if (ReferenceEquals(_areaTableWind, _wind) && _areaTable is not null) return _areaTable;
+
+        int w = _map.Width, h = _map.Height;
+        byte[] table = new byte[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                table[y * w + x] = (byte)AreaOfCell(x, y);
+            }
+        }
+        _areaTable = table;
+        _areaTableWind = _wind;
+        return table;
+    }
+
+    private byte[]? _areaTable;
+    private WindMap? _areaTableWind;
+
+    // A* 的待處理清單，每次搜尋重複使用（不用每次重新配置、再慢慢長大）
+    private readonly PriorityQueue<int, float> _open = new();
 
     // 設定這一次規劃用的風向，算好每個海域往 16 個方向走一步的倍數
     private void SetWind(WindMap? wind, Season season)
@@ -364,7 +462,8 @@ public class RoutePlanner
             int px = cells[i - 1] % w, py = cells[i - 1] / w;
             int dx = cells[i] % w - px, dy = cells[i] / w - py;
             if (dx > w / 2) dx -= w; else if (dx < -w / 2) dx += w;
-            int m = Array.FindIndex(Moves, v => v.Dx == dx && v.Dy == dy);
+            int m = 0;
+            while (Moves[m].Dx != dx || Moves[m].Dy != dy) m++;
             time[i] = time[i - 1] + Moves[m].Len * _moveCost[AreaOfCell(px, py), m];
         }
         return time;
@@ -394,17 +493,6 @@ public class RoutePlanner
             time += length / pieces / speed;
         }
         return time;
-    }
-
-    // 第一次碰到這一格時，初始化它的資料
-    private void Touch(int i)
-    {
-        if (_stamp[i] != _run)
-        {
-            _stamp[i] = _run;
-            _g[i] = float.MaxValue;
-            _closed[i] = false;
-        }
     }
 
     // 16 個方向：上下左右、斜角、「走兩格斜一格」，以及每一步的長度
@@ -438,6 +526,21 @@ public class RoutePlanner
             return SeaAt(cx + sx, cy) && SeaAt(cx + sx, cy + sy);
         }
         return SeaAt(cx, cy + sy) && SeaAt(cx + sx, cy + sy);
+    }
+
+    // PassIsClear 的快速版：cur 離地圖邊界至少 2 格時，不用處理左右相連和上下範圍
+    private static bool PassIsClearInterior(bool[] isSea, int w, int cur, int dx, int dy)
+    {
+        int sx = Math.Sign(dx), sy = Math.Sign(dy);
+        if (Math.Abs(dx) == 1 && Math.Abs(dy) == 1)
+        {
+            return isSea[cur + sx] && isSea[cur + sy * w];
+        }
+        if (Math.Abs(dx) == 2)
+        {
+            return isSea[cur + sx] && isSea[cur + sx + sy * w];
+        }
+        return isSea[cur + sy * w] && isSea[cur + sx + sy * w];
     }
 
     private bool SeaAt(int x, int y) => y >= 0 && y < _map.Height && _map.IsSea[y * _map.Width + _map.WrapCellX(x)];

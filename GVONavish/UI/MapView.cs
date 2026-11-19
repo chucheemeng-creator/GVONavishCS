@@ -29,7 +29,7 @@ public enum ScreenCorner
 }
 
 /// <summary>雙擊地圖的資訊。</summary>
-public class MapClickEventArgs(WorldPoint world, Keys modifiers, bool onShip, bool onMarker) : EventArgs
+public sealed class MapClickEventArgs(WorldPoint world, Keys modifiers, bool onShip, bool onMarker) : EventArgs
 {
     public WorldPoint World { get; } = world;
     public Keys Modifiers { get; } = modifiers;

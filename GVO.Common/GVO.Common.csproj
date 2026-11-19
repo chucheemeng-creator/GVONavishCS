@@ -6,12 +6,8 @@
     <!-- net10.0：只有不依賴 Windows 的部分（IO，給 GVODiscoverySync.Core 用，Linux 也能編譯、跑測試）；
          net10.0-windows：加上截圖、找遊戲視窗（Capture） -->
     <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>GVO.Common</AssemblyName>
     <RootNamespace>GVO.Common</RootNamespace>
-    <!-- 讓這個專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">

@@ -294,4 +294,21 @@ public class RoutePlannerTests
         Assert.Equal(route.Length, start.Remaining, 6);
         Assert.Equal(0.0, end.Remaining, 6);
     }
+
+    [Theory]
+    [InlineData("里斯本", "開普敦")]   // 距離超過 ParallelMinDistance：三次搜尋同時跑
+    [InlineData("塞維爾", "亞歷山大")] // 短的：照順序跑
+    public void 兩季規劃_和單季規劃選出同一條航線(string from, string to)
+    {
+        RoutePlanner planner = new(Map);
+        foreach (Season season in new[] { Season.Summer, Season.Winter })
+        {
+            PlannedRoute? both = planner.PlanBothSeasons(At(from), At(to), TestFiles.WindMap, season);
+            PlannedRoute? single = planner.Plan(At(from), At(to), TestFiles.WindMap, season);
+            Assert.NotNull(both);
+            Assert.NotNull(single);
+            Assert.Equal(single!.Waypoints, both!.Waypoints);
+            Assert.Equal(single.Length, both.Length);
+        }
+    }
 }

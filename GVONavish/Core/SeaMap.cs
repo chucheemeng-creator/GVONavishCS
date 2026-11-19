@@ -121,9 +121,9 @@ public class SeaMap
             SeaMap map = new(w, h, isSea);
             return map.IsPlausible ? map : null; // 全海、全陸之類的錯誤資料當成讀不到（會改用附帶的地圖重建）
         }
-        catch
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            return null;
+            return null; // 讀到一半就結束（EndOfStreamException 也是 IOException）、壓縮資料壞掉
         }
     }
 

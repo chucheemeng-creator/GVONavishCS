@@ -6,15 +6,10 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>disable</ImplicitUsings>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>GVONavish</AssemblyName>
     <RootNamespace>GVONavish</RootNamespace>
     <!-- exe 檔、工作列、檔案總管顯示的圖示 -->
     <ApplicationIcon>GVONavish.ico</ApplicationIcon>
-    <!-- 讓這個專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>

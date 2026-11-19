@@ -10,7 +10,7 @@ using System.Collections.Generic;
 
 namespace GVONavish.Core;
 
-public class SpeedMeter
+public sealed class SpeedMeter
 {
     /// <summary>用多長時間內的移動來算速度（毫秒）。越長越穩定，但轉彎、加減速反應越慢。</summary>
     public long WindowMs { get; set; } = 5000;
