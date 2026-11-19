@@ -23,7 +23,7 @@ public static class RouteStore
     /// </summary>
     public const int CurrentVersion = 2;
 
-    private class FileData
+    private sealed class FileData
     {
         public int Version { get; set; } = CurrentVersion;
         // 沒有預設值：檔案裡少了 Routes 時會是 null，才分辨得出「格式不對」和「真的沒有航線」
@@ -115,7 +115,7 @@ public static class RouteStore
     }
 
     /// <summary>WorldPoint 存成 [x, y]。</summary>
-    private class WorldPointConverter : JsonConverter<WorldPoint>
+    private sealed class WorldPointConverter : JsonConverter<WorldPoint>
     {
         public override WorldPoint Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {

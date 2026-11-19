@@ -12,7 +12,7 @@ using System.Linq;
 
 namespace GVONavish.Core;
 
-public class ShipRoute
+public sealed class ShipRoute
 {
     /// <summary>
     /// 航線的點。通常只有一條線；「與上一段航線連接」之後會有好幾條（中間不畫線相連）。
@@ -99,7 +99,7 @@ public class ShipRoute
     }
 }
 
-public class ShipRouteList
+public sealed class ShipRouteList
 {
     /// <summary>最多保留幾段一般航線（我的最愛不算）。和原版相同是 30。</summary>
     public int MaxRoutesWithoutFavorites { get; set; } = 30;

@@ -25,7 +25,7 @@ using System.Threading.Tasks;
 namespace GVONavish.Core;
 
 /// <summary>規劃好的航線。</summary>
-public class PlannedRoute
+public sealed class PlannedRoute
 {
     /// <summary>
     /// 轉折點（世界座標）。X 是「攤開」的座標：跨過地圖邊界時不折回，維持連續，畫圖時直接用。
@@ -61,7 +61,7 @@ public class PlannedRoute
     public string EndName { get; set; } = "";
 }
 
-public class RoutePlanner
+public sealed class RoutePlanner
 {
     private readonly SeaMap _map;
 

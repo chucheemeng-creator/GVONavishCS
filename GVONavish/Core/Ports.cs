@@ -23,7 +23,7 @@ using System.Text.Json;
 
 namespace GVONavish.Core;
 
-public class Port
+public sealed class Port
 {
     public string Name { get; }
     public string Region { get; }

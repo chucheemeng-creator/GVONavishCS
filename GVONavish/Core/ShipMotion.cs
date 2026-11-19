@@ -29,7 +29,7 @@ using System.Collections.Generic;
 
 namespace GVONavish.Core;
 
-public class ShipMotion
+public sealed class ShipMotion
 {
     /// <summary>新的點偏離預測直線超過這麼多格，就當作船轉彎或停下了。</summary>
     public double TurnThreshold { get; set; } = 1.3;

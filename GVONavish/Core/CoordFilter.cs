@@ -29,7 +29,7 @@ public enum CoordFilterResult
     Invalid,
 }
 
-public class CoordFilter
+public sealed class CoordFilter
 {
     /// <summary>
     /// 船每秒最多可能移動幾個座標單位。

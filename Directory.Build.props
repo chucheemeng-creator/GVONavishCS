@@ -1,0 +1,14 @@
+<Project>
+
+  <!-- 所有專案共用的設定（GVONavish、GVO.Common、發現物同步和它們的測試）。
+       各專案自己的 .csproj 還是可以覆蓋這裡的值。 -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Bitmap、Graphics.CopyFromScreen、Icon 在 Windows Desktop 執行環境裡 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- 讓專案在非 Windows 電腦上也能編譯（實際執行仍需 Windows） -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+</Project>
