@@ -23,25 +23,17 @@ using System.Text.Json;
 
 namespace GVONavish.Core;
 
-public sealed class Port
+public sealed class Port(string name, string region, int x, int y, string english = "")
 {
-    public string Name { get; }
-    public string Region { get; }
-    public WorldPoint Position { get; }
+    public string Name { get; } = name;
+    public string Region { get; } = region;
+    public WorldPoint Position { get; } = new WorldPoint(x, y);
 
     /// <summary>英文名（可能有好幾種寫法，第一個是地圖上用的）。</summary>
-    public IReadOnlyList<string> EnglishNames { get; }
+    public IReadOnlyList<string> EnglishNames { get; } = [.. english.Split('|').Select(s => s.Trim()).Where(s => s != "")];
 
     /// <summary>主要的英文名（地圖上的寫法）。</summary>
     public string English => EnglishNames.Count > 0 ? EnglishNames[0] : "";
-
-    public Port(string name, string region, int x, int y, string english = "")
-    {
-        Name = name;
-        Region = region;
-        Position = new WorldPoint(x, y);
-        EnglishNames = [.. english.Split('|').Select(s => s.Trim()).Where(s => s != "")];
-    }
 
     /// <summary>「中文名 英文名」；沒有英文名（例如 ports.json 自訂的港口）時只有中文名，不會多出空格。</summary>
     public string NameWithEnglish(string separator = " ") => English != "" ? Name + separator + English : Name;
