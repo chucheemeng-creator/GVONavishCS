@@ -191,7 +191,7 @@ public static class PortList
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"ports.json 第 {index} 筆格式錯誤，略過：{ex.Message}");
+                    CrashLog.Write($"ports.json 第 {index} 筆格式錯誤，略過", ex);
                 }
             }
         }

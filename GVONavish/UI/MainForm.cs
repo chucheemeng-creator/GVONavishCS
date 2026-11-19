@@ -729,7 +729,17 @@ public class MainForm : Form
     /// 照目前的風向設定，把規劃航線的每一段重新規劃一次（起點、終點不變）。
     /// 算好以前先留著原本的航線；計算期間航線被改過（清除、刪掉一段…）就不套用。
     /// </summary>
-    private async void ReplanLegs()
+    private void ReplanLegs() => ObserveFault(ReplanLegsAsync());
+
+    /// <summary>背景工作萬一出了沒接住的例外，留下紀錄（不然例外會被吞掉，什麼線索都沒有）。</summary>
+    private static void ObserveFault(Task task)
+    {
+        task.ContinueWith(t => CrashLog.Write("規劃航線的工作失敗", t.Exception),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task ReplanLegsAsync()
     {
         if (_planning || _planner is null) return;
 
@@ -1179,8 +1189,11 @@ public class MainForm : Form
 
     /// <param name="append">true：加在現有規劃航線的後面；false：取代原本的規劃航線。</param>
     /// <param name="fromDialog">是不是從「規劃航線」視窗來的（改風向時會照新的風向重新規劃）。</param>
-    private async void PlanRoute(WorldPoint start, WorldPoint end, string startName, string endName, bool append,
-        bool fromDialog = false)
+    private void PlanRoute(WorldPoint start, WorldPoint end, string startName, string endName, bool append,
+        bool fromDialog = false) => ObserveFault(PlanRouteAsync(start, end, startName, endName, append, fromDialog));
+
+    private async Task PlanRouteAsync(WorldPoint start, WorldPoint end, string startName, string endName, bool append,
+        bool fromDialog)
     {
         if (_planning)
         {
@@ -1538,6 +1551,12 @@ public class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        base.OnFormClosing(e);
+        if (e.Cancel)
+        {
+            return; // 有人取消了關閉：程式照常運作，不能先停 timer、存檔
+        }
+
         _timer.Stop();
         _saveTimer.Stop();
         _routes.CloseCurrent();
@@ -1550,9 +1569,17 @@ public class MainForm : Form
         }
 
         SaveSettings();
+    }
 
-        _capture.Dispose();
-        base.OnFormClosing(e);
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _timer.Dispose();
+            _saveTimer.Dispose();
+            _capture.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     #endregion

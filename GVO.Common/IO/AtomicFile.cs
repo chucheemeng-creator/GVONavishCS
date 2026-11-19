@@ -19,6 +19,11 @@ public static class AtomicFile
         try
         {
             write(tmp);
+            // 寫完先真的存到磁碟，再換名：不然斷電時檔名已經換了，內容還在系統快取裡，可能留下空檔
+            using (FileStream fs = new(tmp, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            {
+                fs.Flush(flushToDisk: true);
+            }
             if (File.Exists(path))
             {
                 File.Replace(tmp, path, null);

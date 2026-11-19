@@ -210,7 +210,7 @@ public class AppSettings
         catch (Exception ex)
         {
             // 存不了（例如放在唯讀資料夾）不影響使用：原檔不動，記錄下來，主視窗的狀態列會提示
-            System.Diagnostics.Debug.WriteLine("settings.json 存檔失敗：" + ex);
+            CrashLog.Write("settings.json 存檔失敗", ex);
             LastSaveFailed = true;
         }
     }

@@ -6,6 +6,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using GVONavish;
 using GVONavish.Core;
 using Xunit;
 
@@ -234,5 +235,55 @@ public class StorageTests : IDisposable
         Assert.True(s.SaveDisabled);
         locked.Dispose();
         Assert.Equal("壞掉了", File.ReadAllText(SettingsPath)); // 沒有被預設值蓋掉
+    }
+}
+
+[Collection("程式資料夾的檔案")]
+public class CrashLogTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "gvonavish-crash-" + Guid.NewGuid().ToString("N"));
+    private readonly string _original = CrashLog.FilePath;
+
+    public CrashLogTests()
+    {
+        Directory.CreateDirectory(_dir);
+        CrashLog.FilePath = Path.Combine(_dir, "crash.log");
+    }
+
+    public void Dispose()
+    {
+        CrashLog.FilePath = _original;
+        Directory.Delete(_dir, recursive: true);
+    }
+
+    [Fact]
+    public void 寫紀錄_有說明和例外內容_一筆接著一筆()
+    {
+        CrashLog.Write("第一筆", new InvalidOperationException("壞掉了"));
+        CrashLog.Write("第二筆");
+
+        string text = File.ReadAllText(CrashLog.FilePath);
+        Assert.Contains("第一筆", text);
+        Assert.Contains("InvalidOperationException", text);
+        Assert.Contains("壞掉了", text);
+        Assert.True(text.IndexOf("第一筆", StringComparison.Ordinal) < text.IndexOf("第二筆", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void 寫紀錄_資料夾不存在_不丟例外()
+    {
+        CrashLog.FilePath = Path.Combine(_dir, "不存在的資料夾", "crash.log");
+        CrashLog.Write("寫不進去");
+    }
+
+    [Fact]
+    public void 寫紀錄_超過上限_舊的換成old()
+    {
+        File.WriteAllBytes(CrashLog.FilePath, new byte[CrashLog.MaxBytes + 1]);
+        CrashLog.Write("新的一筆");
+
+        Assert.True(File.Exists(CrashLog.FilePath + ".old"));
+        Assert.Contains("新的一筆", File.ReadAllText(CrashLog.FilePath));
+        Assert.True(new FileInfo(CrashLog.FilePath).Length < CrashLog.MaxBytes);
     }
 }

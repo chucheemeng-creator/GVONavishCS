@@ -109,7 +109,7 @@ public static class RouteStore
         catch (Exception ex)
         {
             // 原檔不動（AtomicFile 先寫暫存檔），記錄下來；主視窗的狀態列會提示
-            System.Diagnostics.Debug.WriteLine("routes.json 存檔失敗：" + ex);
+            CrashLog.Write("routes.json 存檔失敗", ex);
             return false;
         }
     }
