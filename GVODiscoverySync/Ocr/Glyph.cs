@@ -9,18 +9,13 @@ using System.Numerics;
 
 namespace GVODiscoverySync.Ocr;
 
-public sealed class Glyph
+public sealed class Glyph(ushort[] rows)
 {
     /// <summary>一個字的寬度（遊戲像素）。</summary>
     public const int Width = 16;
 
     // 每一橫排一個數字，由左到右是高位元到低位元
-    private readonly ushort[] _rows;
-
-    public Glyph(ushort[] rows)
-    {
-        _rows = rows;
-    }
+    private readonly ushort[] _rows = rows;
 
     /// <summary>
     /// 認不出來的一格：遊戲畫面被 Windows 放大顯示時，字形是從糊掉的畫面取樣、再找最像的已知字形（見 GlyphStore.Snap）；
