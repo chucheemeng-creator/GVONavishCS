@@ -691,46 +691,49 @@ public class MapView : Control
 
     private void DrawMapTile(Graphics g, double tileX, double tileY, double tileW, double tileH)
     {
+        // 每一張地圖的位置都用同樣的方式四捨五入成整數像素，再貼上去。
+        // 地圖比例是 12.5% 的倍數，一張地圖的寬高一定是整數像素，所以左右相接的幾張圖取整後的位置差剛好是整張圖的寬度，
+        // 船移動（每次只差 0.25 像素）時，每一張圖會在同一個時間點一起跳 1 像素。
+        // 以前第一張（位置是負的）往上取整、後面幾張往下取整，兩邊跳的時間差了好幾次更新，
+        // 在地圖左右相接的地方（例如倫敦、里斯本附近）會看到一邊先動、另一邊慢一點。
+        int tileLeft = (int)Math.Round(tileX);
+        int tileTop = (int)Math.Round(tileY);
+        int tileRight = tileLeft + (int)Math.Round(tileW);
+        int tileBottom = tileTop + (int)Math.Round(tileH);
+
         // 這一張地圖和畫面重疊的範圍
-        double visL = Math.Max(0, tileX);
-        double visT = Math.Max(0, tileY);
-        double visR = Math.Min(ClientSize.Width, tileX + tileW);
-        double visB = Math.Min(ClientSize.Height, tileY + tileH);
-        if (visR <= visL || visB <= visT)
+        int dx = Math.Max(0, tileLeft);
+        int dy = Math.Max(0, tileTop);
+        int right = Math.Min(ClientSize.Width, tileRight);
+        int bottom = Math.Min(ClientSize.Height, tileBottom);
+        int w = right - dx;
+        int h = bottom - dy;
+        if (w <= 0 || h <= 0)
         {
             return;
         }
+        int sx = dx - tileLeft;   // 這個範圍在這張地圖裡的位置（縮放後的像素）
+        int sy = dy - tileTop;
 
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
         if (_scale <= 1.0)
         {
             // 縮小：用預先縮好的圖（畫質好），1:1 複製可見的部分，速度快
             Bitmap scaled = GetScaledMap();
-            int sx = (int)Math.Floor(visL - tileX);
-            int sy = (int)Math.Floor(visT - tileY);
-            int dx = (int)Math.Floor(visL);
-            int dy = (int)Math.Floor(visT);
-            int w = Math.Min((int)Math.Ceiling(visR) - dx, scaled.Width - sx);
-            int h = Math.Min((int)Math.Ceiling(visB) - dy, scaled.Height - sy);
+            w = Math.Min(w, scaled.Width - sx);
+            h = Math.Min(h, scaled.Height - sy);
             if (w <= 0 || h <= 0)
             {
                 return;
             }
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
             g.DrawImage(scaled, new Rectangle(dx, dy, w, h), new Rectangle(sx, sy, w, h), GraphicsUnit.Pixel);
         }
         else
         {
             // 放大：直接從原圖取可見的那一小塊放大，不做模糊處理（和原版一樣是方格狀）
-            RectangleF src = new(
-                (float)((visL - tileX) / _scale),
-                (float)((visT - tileY) / _scale),
-                (float)((visR - visL) / _scale),
-                (float)((visB - visT) / _scale));
-            RectangleF dest = new((float)visL, (float)visT, (float)(visR - visL), (float)(visB - visT));
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(_map!, dest, src, GraphicsUnit.Pixel);
+            RectangleF src = new((float)(sx / _scale), (float)(sy / _scale), (float)(w / _scale), (float)(h / _scale));
+            g.DrawImage(_map!, new Rectangle(dx, dy, w, h), src, GraphicsUnit.Pixel);
         }
     }
 
