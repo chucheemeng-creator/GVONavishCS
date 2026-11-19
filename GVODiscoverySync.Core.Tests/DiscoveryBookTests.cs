@@ -276,4 +276,20 @@ public sealed class DiscoveryBookTests : IDisposable
         book.ReloadMarks();
         Assert.True(book.Categories["史跡"][0].Marked[0]);
     }
+
+    [Fact]
+    public void 重新讀取打勾狀態_檔案壞了或不見了_維持原狀不丟例外()
+    {
+        string path = NewBook();
+        DiscoveryBook book = DiscoveryBook.Load(path);
+        book.Categories["史跡"][0].Marked[0] = true; // 記憶體裡的狀態
+
+        File.WriteAllText(path, "這不是 xlsx");
+        book.ReloadMarks();
+        Assert.True(book.Categories["史跡"][0].Marked[0]);
+
+        File.Delete(path);
+        book.ReloadMarks();
+        Assert.True(book.Categories["史跡"][0].Marked[0]);
+    }
 }
