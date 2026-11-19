@@ -93,6 +93,35 @@ public sealed class DataFileTests : IDisposable
         Assert.Equal(6, settings.OcrScale);
     }
 
+    [Theory]
+    [InlineData("""{ "Layout": { "RowCount": 100000 } }""")] // 列數太大
+    [InlineData("""{ "Layout": { "RowHeight": 5000 } }""")] // 列高太大
+    [InlineData("""{ "Layout": { "ListWidth": 0 } }""")] // 清單寬度是 0
+    [InlineData("""{ "Layout": { "TitleHeight": -5 } }""")] // 標題高度是負的
+    public void 版面數值不合理時整組用預設值(string json)
+    {
+        string path = Path.Combine(_dir, "s.json");
+        File.WriteAllText(path, json);
+
+        AppSettings settings = AppSettings.Load(path);
+
+        Assert.True(settings.Layout.IsValid);
+        Assert.Equal(new ListLayout().RowCount, settings.Layout.RowCount);
+        Assert.Equal(new ListLayout().ListWidth, settings.Layout.ListWidth);
+    }
+
+    [Fact]
+    public void 版面數值合理時照設定檔()
+    {
+        string path = Path.Combine(_dir, "s.json");
+        File.WriteAllText(path, """{ "Layout": { "RowCount": 12, "ListX": -300 } }""");
+
+        AppSettings settings = AppSettings.Load(path);
+
+        Assert.Equal(12, settings.Layout.RowCount);
+        Assert.Equal(-300, settings.Layout.ListX);
+    }
+
     [Fact]
     public void 設定檔內容壞了_改名保留_用預設值_之後可以存檔()
     {

@@ -81,7 +81,7 @@ public class AppSettings
         IntervalMs = Math.Clamp(IntervalMs, 100, 5000);
         OcrScale = double.IsFinite(OcrScale) ? Math.Clamp(OcrScale, 1.5, 6) : 3;
         Layout ??= new ListLayout();
-        if (Layout.RowHeight <= 0 || Layout.RowCount <= 0)
+        if (!Layout.IsValid)
         {
             Layout = new ListLayout();
         }

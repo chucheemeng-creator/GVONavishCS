@@ -519,7 +519,7 @@ public sealed class DiscoveryBook
     private static string ColumnOf(string reference)
     {
         int i = 0;
-        while (i < reference.Length && char.IsLetter(reference[i]))
+        while (i < reference.Length && char.IsAsciiLetter(reference[i]))
         {
             i++;
         }
