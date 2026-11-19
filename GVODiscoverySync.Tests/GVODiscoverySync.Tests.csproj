@@ -27,7 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 測試資料：發現物名稱清單、實際讀錯過的案例 -->
+    <!-- TestBook 和發現物名稱清單：和 GVODiscoverySync.Core.Tests 共用 -->
+    <Compile Include="..\GVODiscoverySync.Core.Tests\TestBook.cs" Link="TestBook.cs" />
+    <None Include="..\GVODiscoverySync.Core.Tests\TestData\Discoveries.tsv" Link="TestData\Discoveries.tsv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 測試資料：截圖、學過的字形 -->
     <None Include="TestData\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
