@@ -1,0 +1,38 @@
+name: GVODiscoverySync 程式錯誤
+description: 發現物同步工具（GVODiscoverySync）的程式錯誤
+labels: ["discovery-sync"]
+body:
+  - type: markdown
+    attributes:
+      value: 只確定是程式錯誤才開 Issue；問題、建議或使用心得請到討論區。
+  - type: input
+    id: version
+    attributes:
+      label: GVODiscoverySync 版本
+      description: 例如 v0.2.69
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 例如 Windows 11 24H2
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼事
+      description: 例如哪一頁、哪個發現物讀錯或沒打勾；預期的結果和實際的結果各是什麼？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. ...
+        2. ...
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他資訊
+      description: 遊戲畫面截圖（不要包含帳號、角色名稱等不想公開的資訊）、除錯輸出、Excel 版本。
