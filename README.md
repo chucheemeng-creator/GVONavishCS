@@ -8,6 +8,15 @@
 
 有問題、建議或使用心得：請到 [Discussions（討論區）](../../discussions) 發文；確定是程式錯誤的話請開 [Issue](../../issues)。
 
+## 這個 repo 裡的工具
+
+| 工具 | 用途 | 說明 | Issue 標籤 |
+|---|---|---|---|
+| **GVONavish** | 航海地圖輔助：讀「測量」座標、顯示船位、規劃航線 | 本頁 | `navish` |
+| **GVODiscoverySync** | 讀「發現物一覽」畫面，自動在安瑟兒的發現物統計 Excel 打勾 | [GVODiscoverySync/README.md](GVODiscoverySync/README.md) | `discovery-sync` |
+
+兩個工具共用 `GVO.Common`，各自發佈新版：Release 的 tag 以 `Navish-v` 開頭的是 GVONavish，以 `DiscoverySync-v` 開頭的是 GVODiscoverySync。開 Issue 時請選對應的範本，會自動加上標籤。
+
 ---
 
 ## 功能

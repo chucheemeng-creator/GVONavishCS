@@ -1,0 +1,38 @@
+name: GVONavish 程式錯誤
+description: 航海地圖輔助工具（GVONavish）的程式錯誤
+labels: ["navish"]
+body:
+  - type: markdown
+    attributes:
+      value: 只確定是程式錯誤才開 Issue；問題、建議或使用心得請到討論區。
+  - type: input
+    id: version
+    attributes:
+      label: GVONavish 版本
+      description: 例如 v1.1.1（視窗右鍵選單或 Release 頁面可以看到）
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 例如 Windows 11 24H2
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼事
+      description: 預期的結果和實際的結果各是什麼？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. ...
+        2. ...
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他資訊
+      description: 截圖、錯誤訊息，或遊戲畫面的設定（解析度、視窗模式）。
